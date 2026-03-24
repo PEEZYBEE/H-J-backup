@@ -1,5 +1,7 @@
 from app import app, db
 from models import User, Category, Product
+import os
+import secrets
 
 def seed_database():
     with app.app_context():
@@ -14,7 +16,11 @@ def seed_database():
                 full_name='Admin User',
                 phone='+1234567890'
             )
-            admin.set_password('admin123')
+            admin_pw = os.getenv('SEED_ADMIN_PASSWORD')
+            if not admin_pw:
+                admin_pw = secrets.token_urlsafe(12)
+                print(f"Generated admin password: {admin_pw}")
+            admin.set_password(admin_pw)
             db.session.add(admin)
             print("✅ Created admin user")
         
@@ -27,7 +33,11 @@ def seed_database():
                 full_name='Cashier User',
                 phone='+1234567891'
             )
-            cashier.set_password('cashier123')
+            cashier_pw = os.getenv('SEED_CASHIER_PASSWORD')
+            if not cashier_pw:
+                cashier_pw = secrets.token_urlsafe(12)
+                print(f"Generated cashier password: {cashier_pw}")
+            cashier.set_password(cashier_pw)
             db.session.add(cashier)
             print("✅ Created cashier user")
         
@@ -40,7 +50,11 @@ def seed_database():
                 full_name='Customer User',
                 phone='+1234567892'
             )
-            customer.set_password('customer123')
+            customer_pw = os.getenv('SEED_CUSTOMER_PASSWORD')
+            if not customer_pw:
+                customer_pw = secrets.token_urlsafe(12)
+                print(f"Generated customer password: {customer_pw}")
+            customer.set_password(customer_pw)
             db.session.add(customer)
             print("✅ Created customer user")
         

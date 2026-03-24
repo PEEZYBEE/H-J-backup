@@ -1,6 +1,5 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from app import db
 from models import Wishlist, WishlistItem, Product, Cart, CartItem
 
 wishlist_bp = Blueprint('wishlist', __name__)
@@ -15,6 +14,7 @@ def get_wishlist():
         
         if not wishlist:
             wishlist = Wishlist(user_id=user_id)
+            from models import db
             db.session.add(wishlist)
             db.session.commit()
         
@@ -40,6 +40,7 @@ def add_to_wishlist():
         wishlist = Wishlist.query.filter_by(user_id=user_id).first()
         if not wishlist:
             wishlist = Wishlist(user_id=user_id)
+            from models import db
             db.session.add(wishlist)
             db.session.flush()
         
@@ -60,6 +61,7 @@ def add_to_wishlist():
             wishlist_id=wishlist.id,
             product_id=product_id
         )
+        from models import db
         db.session.add(wishlist_item)
         db.session.commit()
         
@@ -85,6 +87,7 @@ def remove_from_wishlist(item_id):
         if wishlist.user_id != user_id:
             return jsonify({'error': 'Unauthorized'}), 403
         
+        from models import db
         db.session.delete(wishlist_item)
         db.session.commit()
         
@@ -115,6 +118,7 @@ def move_to_cart(item_id):
         cart = Cart.query.filter_by(user_id=user_id).first()
         if not cart:
             cart = Cart(user_id=user_id)
+            from models import db
             db.session.add(cart)
             db.session.flush()
         
@@ -143,9 +147,11 @@ def move_to_cart(item_id):
                 product_id=wishlist_item.product_id,
                 quantity=1
             )
+            from models import db
             db.session.add(cart_item)
         
         # Remove from wishlist
+        from models import db
         db.session.delete(wishlist_item)
         db.session.commit()
         

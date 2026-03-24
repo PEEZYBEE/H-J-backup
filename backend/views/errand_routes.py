@@ -1,5 +1,5 @@
 # ~/hnj/backend/views/errand_routes.py
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify, current_app, g
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from datetime import datetime, date, timedelta
 import os
@@ -7,6 +7,9 @@ import uuid
 import json
 
 errand_bp = Blueprint('errand', __name__)
+
+from utils.schemas import CreateErrandSchema
+from marshmallow import ValidationError
 
 # ==================== HELPER FUNCTIONS ====================
 
@@ -38,10 +41,28 @@ def save_uploaded_file(file, folder, filename):
 def send_sms(phone, message):
     """Send SMS via Africa's Talking"""
     try:
-        # TODO: Implement Africa's Talking API
-        # For now, just log and return success
-        current_app.logger.info(f"SMS to {phone}: {message}")
-        return {'success': True, 'message_id': str(uuid.uuid4())}
+        # Read credentials from environment
+        username = os.getenv('AFRICASTALKING_USERNAME', 'sandbox')
+        api_key = os.getenv('AFRICASTALKING_API_KEY')
+
+        if not api_key:
+            current_app.logger.warning('AFRICASTALKING_API_KEY not configured; skipping SMS send')
+            return {'success': False, 'error': 'AFRICASTALKING_API_KEY not configured'}
+
+        # Import here so the package is optional until configured
+        import africastalking
+
+        # Initialize SDK
+        africastalking.initialize(username=username, api_key=api_key)
+        sms = africastalking.SMS
+
+        # Africa's Talking expects international format numbers (e.g., +2547...)
+        recipients = [phone]
+
+        # Send message
+        response = sms.send(message, recipients)
+        current_app.logger.info(f"AFRICASTALKING SMS response: {response}")
+        return {'success': True, 'response': response}
     except Exception as e:
         current_app.logger.error(f"SMS error: {str(e)}")
         return {'success': False, 'error': str(e)}
@@ -77,7 +98,11 @@ def create_delivery_agent():
         if user.role not in ['admin', 'senior', 'manager']:
             return jsonify({'success': False, 'message': 'Unauthorized'}), 403
         
-        data = request.get_json()
+        data = getattr(g, 'sanitized_json', None) or request.get_json(silent=True)
+        try:
+            data = CreateErrandSchema().load(data or {})
+        except ValidationError as ve:
+            return jsonify({'success': False, 'message': 'Invalid input', 'errors': ve.messages}), 400
         
         # Validate required fields
         if not data.get('code') or not data.get('name') or not data.get('type'):
@@ -1193,7 +1218,7 @@ def get_my_rejected_errands():
 
 # ==================== NOTIFICATION ROUTES ====================
 
-@errand_bp.route('/notifications', methods=['GET'])
+@errand_bp.route('/errand-notifications', methods=['GET'])
 @jwt_required()
 def get_my_notifications():
     """Get in-app notifications for current user"""
@@ -1485,3 +1510,22 @@ def get_runner_errands(runner_id):
     except Exception as e:
         current_app.logger.error(f"Get runner errands error: {str(e)}")
         return jsonify({'success': False, 'message': 'Failed to fetch runner errands'}), 500
+
+
+# Development-only SMS test endpoint
+@errand_bp.route('/test-sms', methods=['POST'])
+def test_sms():
+    """Development-only endpoint to test SMS sending via Africa's Talking."""
+    # Disable in production
+    if current_app.config.get('IS_PRODUCTION'):
+        return jsonify({'success': False, 'message': 'Disabled in production'}), 403
+
+    data = request.get_json() or {}
+    phone = data.get('phone')
+    message = data.get('message')
+
+    if not phone or not message:
+        return jsonify({'success': False, 'message': 'phone and message are required'}), 400
+
+    result = send_sms(phone, message)
+    return jsonify(result)

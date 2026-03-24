@@ -1,7 +1,10 @@
 # ~/hnj/backend/models.py - ULTIMATE FIXED VERSION - WITH VIDEO SUPPORT
 from datetime import datetime, date
 from flask_bcrypt import generate_password_hash, check_password_hash
-from app import db
+from flask_sqlalchemy import SQLAlchemy
+
+# Create the SQLAlchemy db here to avoid circular imports between app and models
+db = SQLAlchemy()
 import json
 
 # ==================== TOKEN BLACKLIST ====================
@@ -946,5 +949,33 @@ class ErrandNotification(db.Model):
             'message': self.message,
             'status': self.status,
             'sent_at': self.sent_at.isoformat() if self.sent_at else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+
+# ==================== NOTIFICATION MODEL ====================
+class Notification(db.Model):
+    __tablename__ = 'notifications'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    recipient_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    type = db.Column(db.String(30), nullable=False)  # low_stock, out_of_stock, order, batch, system
+    title = db.Column(db.String(200), nullable=False)
+    message = db.Column(db.Text, nullable=False)
+    data = db.Column(db.JSON)  # Extra context (product_id, order_id, etc.)
+    is_read = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    recipient = db.relationship('User', backref=db.backref('notifications', lazy=True))
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'recipient_id': self.recipient_id,
+            'type': self.type,
+            'title': self.title,
+            'message': self.message,
+            'data': self.data or {},
+            'is_read': self.is_read,
             'created_at': self.created_at.isoformat() if self.created_at else None
         }

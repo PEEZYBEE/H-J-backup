@@ -1,11 +1,55 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, g
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, get_jwt
 from datetime import datetime, timezone, timedelta
-from app import db, bcrypt
-from models import User, TokenBlocklist
+from models import User
+from utils.schemas import AuthLoginSchema
+from marshmallow import ValidationError
 from functools import wraps
+import os
+import re
+import secrets
+
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token
 
 auth_bp = Blueprint('auth', __name__)
+
+
+def _generate_unique_username(email, full_name=''):
+    """Generate a unique username derived from name/email."""
+    base_source = (full_name or '').strip() or email.split('@')[0]
+    normalized = re.sub(r'[^a-zA-Z0-9_]+', '_', base_source).strip('_').lower()
+    base = normalized[:40] if normalized else 'user'
+
+    candidate = base
+    suffix = 1
+    while User.query.filter_by(username=candidate).first():
+        candidate = f"{base}_{suffix}"
+        suffix += 1
+
+    return candidate
+
+
+def _build_auth_response(user, status_code=200, message=None):
+    """Build a standard auth response with JWT token and user payload."""
+    access_token = create_access_token(
+        identity=user.id,
+        additional_claims={
+            'username': user.username,
+            'email': user.email,
+            'role': user.role
+        }
+    )
+
+    payload = {
+        'success': True,
+        'access_token': access_token,
+        'user': user.to_dict()
+    }
+    if message:
+        payload['message'] = message
+
+    return jsonify(payload), status_code
 
 # ========== ROLE-BASED PERMISSION DECORATOR ==========
 def role_required(required_roles):
@@ -32,7 +76,8 @@ def role_required(required_roles):
 @auth_bp.route('/register', methods=['POST'])
 def register():
     try:
-        data = request.get_json()
+        from models import db
+        data = getattr(g, 'sanitized_json', None) or request.get_json(silent=True)
         
         # Validate required fields
         if not data.get('username') or not data.get('email') or not data.get('password'):
@@ -83,7 +128,11 @@ def register():
 @auth_bp.route('/login', methods=['POST'])
 def login():
     try:
-        data = request.get_json()
+        data = getattr(g, 'sanitized_json', None) or request.get_json(silent=True)
+        try:
+            data = AuthLoginSchema().load(data or {})
+        except ValidationError as ve:
+            return jsonify({'success': False, 'error': 'Invalid input', 'messages': ve.messages}), 400
         
         if not data.get('username') or not data.get('password'):
             return jsonify({'success': False, 'error': 'Username and password required'}), 400
@@ -116,12 +165,91 @@ def login():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
+
+# ========== GOOGLE AUTH (LOGIN / REGISTER) ==========
+@auth_bp.route('/google', methods=['POST'])
+def google_auth():
+    try:
+        data = request.get_json() or {}
+        credential = data.get('credential')
+        action = (data.get('action') or 'login').strip().lower()
+        selected_role = (data.get('role') or '').strip().lower()
+        phone = (data.get('phone') or '').strip()
+
+        if action not in ['login', 'register']:
+            return jsonify({'success': False, 'error': 'Invalid action'}), 400
+
+        if not credential:
+            return jsonify({'success': False, 'error': 'Missing Google credential'}), 400
+
+        google_client_id = os.getenv('GOOGLE_CLIENT_ID', '').strip()
+        if not google_client_id:
+            return jsonify({'success': False, 'error': 'Google login is not configured on server'}), 500
+
+        try:
+            id_info = id_token.verify_oauth2_token(
+                credential,
+                google_requests.Request(),
+                google_client_id
+            )
+        except ValueError:
+            return jsonify({'success': False, 'error': 'Invalid Google token'}), 401
+
+        if not id_info.get('email_verified'):
+            return jsonify({'success': False, 'error': 'Google email is not verified'}), 400
+
+        email = (id_info.get('email') or '').strip().lower()
+        full_name = (id_info.get('name') or '').strip()
+
+        if not email:
+            return jsonify({'success': False, 'error': 'Google account email not available'}), 400
+
+        user = User.query.filter_by(email=email).first()
+
+        if action == 'login':
+            if not user:
+                return jsonify({'success': False, 'error': 'No account found for this Google email. Please register with Google first.'}), 404
+
+            if not user.is_active:
+                return jsonify({'success': False, 'error': 'Account is disabled'}), 403
+
+            return _build_auth_response(user, message='Google login successful')
+
+        # action == register
+        if user:
+            return jsonify({'success': False, 'error': 'An account with this Google email already exists. Please use Google login.'}), 409
+
+        valid_roles = ['admin', 'manager', 'senior', 'receiver', 'cashier', 'customer', 'errand']
+        role = selected_role if selected_role in valid_roles else 'cashier'
+
+        new_user = User(
+            username=_generate_unique_username(email, full_name),
+            email=email,
+            full_name=full_name,
+            phone=phone,
+            role=role,
+            is_active=True
+        )
+        # Set a random password to satisfy required password_hash field.
+        new_user.set_password(secrets.token_urlsafe(32))
+
+        from models import db
+        db.session.add(new_user)
+        db.session.commit()
+
+        return _build_auth_response(new_user, status_code=201, message='Google registration successful')
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 # ========== LOGOUT ==========
 @auth_bp.route('/logout', methods=['POST'])
 @jwt_required()
 def logout():
     try:
         jti = get_jwt()['jti']
+        from models import TokenBlocklist, db
         token = TokenBlocklist(jti=jti, created_at=datetime.now(timezone.utc))
         db.session.add(token)
         db.session.commit()
@@ -250,13 +378,13 @@ def create_user(current_user):
         user = User(
             username=data['username'],
             email=data['email'],
-            password_hash=bcrypt.generate_password_hash(data['password']).decode('utf-8'),
             full_name=data.get('full_name', ''),
             phone=data.get('phone', ''),
             role=data['role'],
             is_active=data.get('is_active', True)
         )
-        
+        user.set_password(data['password'])
+        from models import db
         db.session.add(user)
         db.session.commit()
         

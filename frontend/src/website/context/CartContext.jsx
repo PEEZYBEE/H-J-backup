@@ -26,19 +26,15 @@ export const useCart = () => {
 };
 
 export const CartProvider = ({ children }) => {
-  const [cartItems, setCartItems] = useState([]);
-
-  // Load cart from localStorage on mount
-  useEffect(() => {
-    const savedCart = localStorage.getItem('cart');
-    if (savedCart) {
-      try {
-        setCartItems(JSON.parse(savedCart));
-      } catch (error) {
-        console.error('Error parsing cart from localStorage:', error);
-      }
+  const [cartItems, setCartItems] = useState(() => {
+    try {
+      const savedCart = localStorage.getItem('cart');
+      return savedCart ? JSON.parse(savedCart) : [];
+    } catch (error) {
+      console.error('Error parsing cart from localStorage:', error);
+      return [];
     }
-  }, []);
+  });
 
   // Save cart to localStorage whenever it changes
   useEffect(() => {
@@ -100,7 +96,7 @@ export const CartProvider = ({ children }) => {
   };
 
   const getUniqueItems = () => {
-    return cartItems.length; // Number of different products
+    return cartItems.length; 
   };
 
   const value = {
@@ -112,7 +108,7 @@ export const CartProvider = ({ children }) => {
     getCartTotal,
     getTotalItems,
     getUniqueItems,
-    cartCount: getUniqueItems() // This now shows number of unique items
+    cartCount: getUniqueItems() 
   };
 
   return (

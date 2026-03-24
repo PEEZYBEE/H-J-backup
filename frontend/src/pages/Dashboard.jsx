@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   FaBoxOpen, 
@@ -21,6 +21,8 @@ import {
   FaClock, // NEW: for pending errands
   FaCamera
 } from 'react-icons/fa';
+import { toast } from '../components/ui/ToastContainer';
+import { notificationsAPI } from '../services/api';
 
 const Dashboard = () => {
   const [user, setUser] = useState(null);
@@ -139,6 +141,26 @@ const Dashboard = () => {
         ...roleSpecificStats
       });
 
+      // Show toast alerts for low stock when user is staff, but only once per session
+      if (['admin', 'manager', 'senior', 'receiver'].includes(role)) {
+        try {
+          const alreadyShown = sessionStorage.getItem('saw_low_stock_toast');
+          const alertData = await notificationsAPI.getLowStockAlerts();
+          // Only show toasts if not already shown in this session
+          if (!alreadyShown) {
+            if (alertData.out_of_stock_count > 0) {
+              toast(`${alertData.out_of_stock_count} product(s) are out of stock!`, 'error', 8000);
+            }
+            if (alertData.low_stock_count > 0) {
+              toast(`${alertData.low_stock_count} product(s) running low on stock`, 'warning', 6000);
+            }
+            sessionStorage.setItem('saw_low_stock_toast', String(Date.now()));
+          }
+        } catch (e) {
+          // Silently fail - toasts are non-critical
+        }
+      }
+
     } catch (error) {
       console.error('Failed to fetch dashboard data:', error);
     } finally {
@@ -152,13 +174,15 @@ const Dashboard = () => {
       const [usersRes, pendingRes, lowStockRes] = await Promise.all([
         fetchWithAuth('/api/auth/users/stats'),
         fetchWithAuth('/api/receiving/batches/pending'),
-        fetchWithAuth('/api/products/low-stock?threshold=10')
+        notificationsAPI.getLowStockAlerts()
       ]);
+
+      const lowCount = (lowStockRes.low_stock_count || 0) + (lowStockRes.out_of_stock_count || 0);
 
       return {
         totalUsers: usersRes.stats?.total_users || usersRes.data?.stats?.total_users || 0,
         pendingBatches: pendingRes.batches?.length || pendingRes.data?.batches?.length || 0,
-        lowStockItems: lowStockRes.products?.length || lowStockRes.data?.products?.length || 0,
+        lowStockItems: lowCount,
         totalSales: 0,
         totalProducts: 0,
         monthlyRevenue: 25430
@@ -173,14 +197,16 @@ const Dashboard = () => {
       // FIXED: using relative URLs
       const [pendingRes, lowStockRes, staffRes, salesRes] = await Promise.all([
         fetchWithAuth('/api/receiving/batches/pending'),
-        fetchWithAuth('/api/products/low-stock?threshold=10'),
+        notificationsAPI.getLowStockAlerts(),
         fetchWithAuth('/api/auth/users?role=cashier'),
         fetchWithAuth('/api/sales/recent?limit=20')
       ]);
 
+      const lowCount = (lowStockRes.low_stock_count || 0) + (lowStockRes.out_of_stock_count || 0);
+
       return {
         pendingBatches: pendingRes.batches?.length || pendingRes.data?.batches?.length || 0,
-        lowStockItems: lowStockRes.products?.length || lowStockRes.data?.products?.length || 0,
+        lowStockItems: lowCount,
         activeCashiers: staffRes.users?.filter(u => u.is_active).length || staffRes.data?.users?.filter(u => u.is_active).length || 0,
         todaySales: salesRes.sales?.length || salesRes.data?.sales?.length || 0,
         todayRevenue: salesRes.sales?.reduce((sum, sale) => sum + (sale.total_amount || 0), 0) || 
@@ -196,12 +222,14 @@ const Dashboard = () => {
       // FIXED: using relative URLs
       const [pendingRes, lowStockRes] = await Promise.all([
         fetchWithAuth('/api/receiving/batches/pending'),
-        fetchWithAuth('/api/products/low-stock?threshold=10')
+        notificationsAPI.getLowStockAlerts()
       ]);
       
+      const lowCount = (lowStockRes.low_stock_count || 0) + (lowStockRes.out_of_stock_count || 0);
+
       return {
         pendingApprovals: pendingRes.batches?.length || pendingRes.data?.batches?.length || 0,
-        lowStockItems: lowStockRes.products?.length || lowStockRes.data?.products?.length || 0
+        lowStockItems: lowCount
       };
     } catch (error) {
       return { pendingApprovals: 0, lowStockItems: 0 };

@@ -2,7 +2,6 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from datetime import datetime, timedelta
 from sqlalchemy import func
-from app import db
 from models import Order, Product, User, InventoryTransaction, ProductCategory
 
 staff_bp = Blueprint('staff', __name__)
@@ -35,6 +34,7 @@ def get_dashboard():
         ).count()
         
         # Today's revenue
+        from models import db
         today_revenue_result = db.session.query(
             func.sum(Order.total_amount)
         ).filter(
@@ -149,6 +149,7 @@ def update_order_status(order_number):
         if new_status == 'shipped' and data.get('tracking_number'):
             order.notes = f"{order.notes}\nTracking: {data['tracking_number']}" if order.notes else f"Tracking: {data['tracking_number']}"
         
+        from models import db
         db.session.commit()
         
         return jsonify({
@@ -314,7 +315,7 @@ def get_sales_report():
         # Get top products
         product_sales = {}
         for order in orders:
-            for item in order.items:
+            for item in order.order_items:
                 product_id = item.product_id
                 if product_id not in product_sales:
                     product_sales[product_id] = {

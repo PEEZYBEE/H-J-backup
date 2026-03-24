@@ -101,8 +101,8 @@ def save_mpesa_payment_to_db(account_reference, transaction_details, checkout_re
             print(f"❌ Order not found: {order_id}")
             return False
         
-        # Update order payment status
-        order.payment_status = 'paid'
+        # Record payment arrived but do NOT mark order as paid/confirmed yet.
+        # Admin will verify and confirm payment before sending SMS and confirming order.
         order.payment_method = 'mpesa'
         
         # Create payment record
@@ -112,8 +112,8 @@ def save_mpesa_payment_to_db(account_reference, transaction_details, checkout_re
             amount=float(transaction_details.get('Amount', 0)),
             transaction_id=transaction_details.get('MpesaReceiptNumber'),
             phone_number=str(transaction_details.get('PhoneNumber', '')),
-            status='completed',
-            notes=f"M-PESA Payment - CheckoutID: {checkout_request_id}"
+            status='received',
+            notes=f"M-PESA Payment received (awaiting admin confirmation) - CheckoutID: {checkout_request_id}"
         )
         
         # Save to database
@@ -121,9 +121,9 @@ def save_mpesa_payment_to_db(account_reference, transaction_details, checkout_re
         db.session.commit()
         
         print(f"✅ Payment saved successfully!")
-        print(f"   Order #{order.order_number} marked as paid")
+        print(f"   Order #{order.order_number} - payment recorded (awaiting admin confirmation)")
         print(f"   Payment ID: {payment.id}")
-        
+        # NOTE: SMS sending moved to admin confirmation step. Do not auto-send here.
         return True
         
     except Exception as e:
@@ -223,7 +223,8 @@ def is_valid_phone(phone):
 def validate_phone():
     """Validate and format phone number"""
     try:
-        data = request.json
+        from flask import g
+        data = getattr(g, 'sanitized_json', None) or request.get_json(silent=True)
         
         if 'phone' not in data:
             return jsonify({

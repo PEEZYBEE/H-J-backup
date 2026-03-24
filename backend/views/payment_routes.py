@@ -2,7 +2,7 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from datetime import datetime
 import random
-from app import db
+from models import db
 from models import Payment, Order, User, InventoryTransaction, Product
 
 payment_bp = Blueprint('payments', __name__)
@@ -13,7 +13,8 @@ def initiate_payment():
     """Initiate payment for order"""
     try:
         user_id = get_jwt_identity()
-        data = request.get_json()
+        from flask import g
+        data = getattr(g, 'sanitized_json', None) or request.get_json(silent=True)
         
         order_number = data.get('order_number')
         payment_method = data.get('payment_method')
@@ -67,6 +68,13 @@ def complete_payment(payment_id, user_id):
     try:
         payment = Payment.query.get_or_404(payment_id)
         order = Order.query.get(payment.order_id)
+        # Prevent double verification / duplicate SMS: if already completed, return early
+        if payment.status == 'completed' or order.payment_status == 'completed' or order.order_status == 'completed':
+            return jsonify({
+                'message': 'Payment has already been verified',
+                'payment': payment.to_dict(),
+                'order': order.to_dict()
+            }), 200
         
         # Generate transaction ID
         if payment.payment_method == 'mpesa':
@@ -76,18 +84,18 @@ def complete_payment(payment_id, user_id):
         
         payment.status = 'completed'
         payment.notes = 'Payment completed successfully'
-        
-        # Update order
-        order.payment_status = 'paid'
+
+        # Update order statuses to completed
+        order.payment_status = 'completed'
         order.payment_method = payment.payment_method
-        
-        # Only confirm order if it was pending
+
+        # Only mark order completed if it was pending
         if order.order_status == 'pending':
-            order.order_status = 'confirmed'
-        
+            order.order_status = 'completed'
+
         # Update inventory transactions from reserved to sold
-        if order.order_status == 'confirmed':
-            for item in order.items:
+        if order.order_status in ['confirmed', 'completed']:
+            for item in order.order_items:
                 # Find and update the reservation transaction
                 inv_transaction = InventoryTransaction.query.filter_by(
                     product_id=item.product_id,
@@ -122,27 +130,84 @@ def confirm_till_payment():
         if user.role not in ['admin', 'staff']:
             return jsonify({'error': 'Unauthorized'}), 403
         
-        data = request.get_json()
+        from flask import g
+        data = getattr(g, 'sanitized_json', None) or request.get_json(silent=True)
         payment_id = data.get('payment_id')
+        order_id = data.get('order_id')
         confirmed = data.get('confirmed', False)
         till_number = data.get('till_number')
         
-        if not payment_id or not till_number:
-            return jsonify({'error': 'Payment ID and till number required'}), 400
+        # till_number is optional when admin simply wants to mark payment as verified
+        # If neither payment_id nor order_id provided, return error
+        if not payment_id and not order_id:
+            return jsonify({'error': 'Payment ID or Order ID required'}), 400
         
+        # If payment_id not provided but order_id is, create or find a payment record
+        if not payment_id and order_id:
+            order = Order.query.get(order_id)
+            if not order:
+                return jsonify({'error': 'Order not found'}), 404
+
+            payment = Payment.query.filter_by(order_id=order.id).first()
+            if not payment:
+                payment = Payment(
+                    order_id=order.id,
+                    payment_method='till',
+                    amount=order.total_amount or 0,
+                    phone_number=order.customer_phone,
+                    status='pending'
+                )
+                db.session.add(payment)
+                db.session.commit()
+
+            payment_id = payment.id
+
         payment = Payment.query.get_or_404(payment_id)
         order = Order.query.get(payment.order_id)
         
-        payment.transaction_id = till_number
+        # Only set transaction id if till_number provided
+        if till_number:
+            payment.transaction_id = till_number
         
         if confirmed:
-            return complete_payment(payment_id, user_id)
+            # Complete payment and then send SMS confirmation from admin action
+            response = complete_payment(payment_id, user_id)
+
+            try:
+                from views.errand_routes import send_sms
+                # Refresh objects
+                payment = Payment.query.get(payment_id)
+                order = Order.query.get(payment.order_id)
+
+                customer_phone = order.customer_phone or payment.phone_number or ''
+                if customer_phone:
+                    phone_digits = ''.join(ch for ch in customer_phone if ch.isdigit())
+                    if phone_digits.startswith('254'):
+                        at_phone = f'+{phone_digits}'
+                    elif phone_digits.startswith('0'):
+                        at_phone = f'+254{phone_digits[1:]}'
+                    elif customer_phone.startswith('+'):
+                        at_phone = customer_phone
+                    else:
+                        at_phone = f'+{phone_digits}'
+
+                    sms_message = f"Payment confirmed for Order #{order.order_number}. Amount: KSh {float(payment.amount):.2f}. Thank you for shopping with HNJ."
+                    try:
+                        send_result = send_sms(at_phone, sms_message)
+                        print(f"Admin SMS send result: {send_result}")
+                    except Exception as sms_e:
+                        print(f"⚠️ Failed to send admin SMS: {sms_e}")
+
+            except Exception as e:
+                print(f"⚠️ Error while attempting admin SMS send: {e}")
+
+            return response
         else:
             payment.status = 'failed'
             payment.notes = data.get('reason', 'Payment rejected')
             
             # Restore stock
-            for item in order.items:
+            for item in order.order_items:
                 product = Product.query.get(item.product_id)
                 if product:
                     product.stock_quantity += item.quantity

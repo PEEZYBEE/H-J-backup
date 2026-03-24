@@ -1,26 +1,21 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
 import { 
-  FaTwitter, 
   FaFacebook, 
   FaInstagram, 
+  FaWhatsapp,
   FaEnvelope, 
   FaPhone,
-  FaGithub,
-  FaLinkedin,
   FaStore,
   FaBoxOpen,
   FaChartLine,
   FaUserFriends
 } from 'react-icons/fa';
+import { SiTiktok } from 'react-icons/si';
 
 const Footer = () => {
   const isLoggedIn = !!localStorage.getItem('token');
   const currentYear = new Date().getFullYear();
-  
-  // Get user role for conditional links
-  const user = JSON.parse(localStorage.getItem('user') || '{}');
-  const userRole = user.role || 'guest';
 
   return (
     <footer className="bg-gradient-to-r from-[#FF416C] to-[#FF4B2B] text-white py-10 ">
@@ -36,43 +31,43 @@ const Footer = () => {
               </div>
               <div>
                 <h2 className="text-2xl font-bold">HNj Store</h2>
-                <p className="text-sm text-red-100">Inventory Management System</p>
+                <p className="text-sm text-red-100">Business Operations Platform</p>
               </div>
             </div>
             <p className="text-sm text-white/90 leading-relaxed">
-              A comprehensive inventory and sales management solution for businesses of all sizes. 
+              A comprehensive inventory and sales management solution for businesses of all sizes.
               Streamline your operations with our powerful tools.
             </p>
             <div className="flex space-x-4 pt-2">
               <a
-                href="https://github.com"
+                href="https://www.tiktok.com/@h.j.collection?_t=8ojABXrdhJ7&_r=1"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="hover:text-white transition-all duration-300 transform hover:scale-110 hover:rotate-3"
-                title="GitHub"
+                title="TikTok"
               >
-                <FaGithub size={22} />
+                <SiTiktok size={22} />
               </a>
               <a
-                href="https://twitter.com"
+                href="https://wa.me/254714753950"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="hover:text-white transition-all duration-300 transform hover:scale-110 hover:rotate-3"
-                title="Twitter"
+                title="WhatsApp"
               >
-                <FaTwitter size={22} />
+                <FaWhatsapp size={22} />
               </a>
               <a
-                href="https://linkedin.com"
+                href="https://www.instagram.com/h_jcollection?igsh=eWF3cXJpdDljamYz"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="hover:text-white transition-all duration-300 transform hover:scale-110 hover:rotate-3"
-                title="LinkedIn"
+                title="Instagram"
               >
-                <FaLinkedin size={22} />
+                <FaInstagram size={22} />
               </a>
               <a
-                href="https://facebook.com"
+                href="https://www.facebook.com/"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="hover:text-white transition-all duration-300 transform hover:scale-110 hover:rotate-3"
@@ -185,10 +180,10 @@ const Footer = () => {
                 <div>
                   <p className="text-sm font-medium">Email</p>
                   <a 
-                    href="mailto:support@hnjstore.com" 
+                    href="mailto:hnjcollection1@gmail.com" 
                     className="text-sm text-white/90 hover:text-white transition-colors"
                   >
-                    support@hnjstore.com
+                    hnjcollection1@gmail.com
                   </a>
                 </div>
               </div>
@@ -200,10 +195,10 @@ const Footer = () => {
                 <div>
                   <p className="text-sm font-medium">Phone</p>
                   <a 
-                    href="tel:+254712345678" 
+                    href="tel:+254714753950" 
                     className="text-sm text-white/90 hover:text-white transition-colors"
                   >
-                    +254 712 345 678
+                    +254714753950
                   </a>
                 </div>
               </div>
@@ -211,7 +206,11 @@ const Footer = () => {
               <div className="pt-2">
                 <p className="text-sm font-medium mb-2">Business Hours</p>
                 <p className="text-sm text-white/90">Mon - Fri: 8:00 AM - 6:00 PM</p>
-                <p className="text-sm text-white/90">Sat: 9:00 AM - 4:00 PM</p>
+              </div>
+
+              <div className="pt-2">
+                <p className="text-sm font-medium mb-2">Pickup Point</p>
+                <p className="text-sm text-white/90">Dynamic Mall 3rd floor ML 151, Tom Mboya Street, Nairobi, Kenya</p>
               </div>
             </div>
           </div>

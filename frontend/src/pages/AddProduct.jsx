@@ -362,7 +362,7 @@ const AddProduct = () => {
         // Clean up object URLs
         localImages.forEach(img => URL.revokeObjectURL(img.preview));
         localVideos.forEach(vid => URL.revokeObjectURL(vid.preview));
-        navigate('/products');
+        navigate('/dashboard/products');
       } else {
         throw new Error(response.message || 'Failed to add product');
       }
@@ -381,7 +381,7 @@ const AddProduct = () => {
           <p className="text-gray-600">Fill in the essential details</p>
         </div>
         <button
-          onClick={() => navigate('/products')}
+          onClick={() => navigate('/dashboard/products')}
           className="flex items-center gap-2 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
         >
           <FaTimes /> Cancel
@@ -987,7 +987,7 @@ const AddProduct = () => {
         <div className="mt-8 pt-6 border-t flex justify-end gap-4">
           <button
             type="button"
-            onClick={() => navigate('/products')}
+            onClick={() => navigate('/dashboard/products')}
             className="px-6 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
           >
             Cancel

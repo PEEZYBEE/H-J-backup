@@ -21,9 +21,9 @@ const PaymentPage = () => {
   const orderData = location.state?.orderData || {};
   
   const [paymentMethod, setPaymentMethod] = useState('mpesa_till');
-  const [paymentPhone, setPaymentPhone] = useState('');
+  const [paymentPhone, setPaymentPhone] = useState(() => orderData.customerInfo?.phone || '');
   const [mpesaCode, setMpesaCode] = useState('');
-  const [tillNumber] = useState('451234');
+  const tillNumber = '451234';
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentStatus, setPaymentStatus] = useState('pending');
   const [errorMessage, setErrorMessage] = useState('');
@@ -46,11 +46,6 @@ const PaymentPage = () => {
     if (!orderData || !customerInfo || !shippingAddress) {
       navigate('/cart');
     }
-    
-    // Set payment phone to customer's phone by default
-    if (customerInfo.phone && !paymentPhone) {
-      setPaymentPhone(customerInfo.phone);
-    }
   }, [orderData, customerInfo, shippingAddress, navigate]);
 
   const handlePayViaMpesa = () => {
@@ -61,12 +56,12 @@ const PaymentPage = () => {
 
   const handleSubmitOrder = async () => {
     if (!mpesaCode.trim()) {
-      setErrorMessage('Please enter the M-PESA transaction code');
+      setErrorMessage('Please enter the name used to pay');
       return;
     }
 
-    if (mpesaCode.trim().length < 8) {
-      setErrorMessage('Please enter a valid M-PESA transaction code (usually 8-10 characters)');
+    if (mpesaCode.trim().length < 2) {
+      setErrorMessage('Please enter at least two characters for the payer name');
       return;
     }
 
@@ -87,7 +82,7 @@ const PaymentPage = () => {
         orderNumber: finalOrderNumber,
         transactionId: transactionId,
         paymentMethod: 'mpesa_till',
-        mpesaCode: mpesaCode.toUpperCase().trim(),
+        mpesaCode: mpesaCode.trim(),
         paymentPhone: paymentPhone || customerInfo.phone,
         paymentStatus: 'pending_verification',
         orderStatus: 'pending_verification',
@@ -399,25 +394,25 @@ const PaymentPage = () => {
                           <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
                             <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
                               <FaKey className="text-yellow-600" />
-                              Enter M-PESA Transaction Code
+                              Enter the name used to pay (only)
                             </h3>
                             
                             <div className="mb-4">
                               <label className="block text-gray-700 mb-2 font-medium">
-                                Transaction Code from SMS *
+                                Payer Name *
                               </label>
                               <div className="relative">
                                 <input
                                   type="text"
                                   value={mpesaCode}
-                                  onChange={(e) => setMpesaCode(e.target.value.toUpperCase())}
-                                  placeholder="e.g., ABC123XY78"
-                                  className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-transparent uppercase font-mono text-lg"
+                                  onChange={(e) => setMpesaCode(e.target.value)}
+                                  placeholder="Enter payer name exactly as used on payment"
+                                  className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-transparent text-lg"
                                   disabled={isProcessing}
                                 />
                               </div>
                               <p className="text-gray-500 text-sm mt-1">
-                                Enter the code from your M-PESA confirmation SMS
+                                Enter the name that was used to make the payment (exactly as entered on the payee name)
                               </p>
                             </div>
                             

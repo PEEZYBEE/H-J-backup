@@ -1,6 +1,6 @@
 // src/website/pages/OrderConfirmationPage.jsx - COMPLETE VERSION WITH RELATIVE URLS
-import React, { useEffect } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { 
   FaCheckCircle, FaPrint, FaWhatsapp, FaEnvelope,
   FaHome, FaShoppingBag, FaReceipt, FaPhone,
@@ -14,6 +14,13 @@ const OrderConfirmationPage = () => {
   const location = useLocation();
   const navigate = useNavigate();
   
+  const params = useParams();
+
+  const [fetchedOrder, setFetchedOrder] = useState(null);
+
+  const locState = location.state || {};
+  const source = { ...(fetchedOrder || {}), ...(locState || {}) };
+
   const {
     orderId,
     orderNumber,
@@ -25,7 +32,7 @@ const OrderConfirmationPage = () => {
     shippingAddress,
     estimatedDelivery,
     submittedAt
-  } = location.state || {};
+  } = source || {};
 
   // ============ HELPER FUNCTIONS FOR SAFE FORMATTING ============
   
@@ -54,10 +61,32 @@ const OrderConfirmationPage = () => {
 
   // Redirect if no order data
   useEffect(() => {
-    if (!orderId && !orderNumber) {
+    if (!orderId && !orderNumber && !params?.orderId) {
       navigate('/');
     }
   }, [orderId, orderNumber, navigate]);
+
+  // If no location.state provided, try to fetch order by URL param
+  useEffect(() => {
+    const fetchOrderByParam = async () => {
+      try {
+        if ((locState && Object.keys(locState).length) || !params?.orderId) return;
+        const token = localStorage.getItem('token') || localStorage.getItem('access_token');
+        const res = await fetch(`/api/orders/orders/${encodeURIComponent(params.orderId)}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {}
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        // backend might return order under `order` or directly
+        setFetchedOrder(data.order || data || null);
+      } catch (err) {
+        console.warn('Failed to fetch order by id', err);
+      }
+    };
+
+    fetchOrderByParam();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params?.orderId]);
 
   // Safely get values with fallbacks
   const displayOrderNumber = orderNumber || orderId || 'N/A';
@@ -72,6 +101,94 @@ const OrderConfirmationPage = () => {
   const displaySubmittedAt = formatDate(submittedAt);
   const displayEstimatedDelivery = estimatedDelivery || '2-4 business days';
   const displayShippingAddress = shippingAddress || 'To be confirmed';
+
+  // Suggested products state
+  const [suggestedProducts, setSuggestedProducts] = useState([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+
+  // Fetch related products preferring same subcategory first
+  const fetchSuggestedProducts = async () => {
+    try {
+      if (!orderItems || orderItems.length === 0) return;
+
+      setSuggestionsLoading(true);
+
+      // Collect unique subcategory ids and category ids from ordered items
+      const subcategoryIds = Array.from(new Set(orderItems
+        .map(i => i.subcategory_id || i.subcategoryId || (i.subcategory && i.subcategory.id))
+        .filter(Boolean)
+      ));
+
+      const categoryIds = Array.from(new Set(orderItems
+        .map(i => i.category_id || i.categoryId || (i.category && i.category.id))
+        .filter(Boolean)
+      ));
+
+      if (subcategoryIds.length === 0 && categoryIds.length === 0) {
+        setSuggestedProducts([]);
+        return;
+      }
+
+      // Import API helpers
+      const { getSubcategoryProducts, getProductsByCategory } = await import('../../services/api');
+
+      const orderedIds = new Set(orderItems.map(i => Number(i.id)));
+      const seen = new Set();
+      const results = [];
+
+      // First try subcategories
+      for (const subId of subcategoryIds) {
+        try {
+          const data = await getSubcategoryProducts(subId);
+          const products = Array.isArray(data) ? data : (data.products || data.data || []);
+
+          for (const p of products) {
+            if (results.length >= 8) break;
+            if (!p || orderedIds.has(Number(p.id))) continue;
+            if (seen.has(Number(p.id))) continue;
+            seen.add(Number(p.id));
+            results.push(p);
+          }
+          if (results.length >= 8) break;
+        } catch (err) {
+          console.warn('Subcategory fetch failed', subId, err);
+        }
+      }
+
+      // If not enough, fall back to category-wide fetch
+      if (results.length < 8) {
+        for (const catId of categoryIds) {
+          try {
+            const data = await getProductsByCategory(catId);
+            const products = Array.isArray(data) ? data : (data.products || data.data || []);
+
+            for (const p of products) {
+              if (results.length >= 8) break;
+              if (!p || orderedIds.has(Number(p.id))) continue;
+              if (seen.has(Number(p.id))) continue;
+              seen.add(Number(p.id));
+              results.push(p);
+            }
+            if (results.length >= 8) break;
+          } catch (err) {
+            console.warn('Category fetch failed', catId, err);
+          }
+        }
+      }
+
+      setSuggestedProducts(results.slice(0, 4));
+    } catch (err) {
+      console.error('Failed to fetch suggested products', err);
+      setSuggestedProducts([]);
+    } finally {
+      setSuggestionsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchSuggestedProducts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderItems]);
 
   // Print receipt
   const handlePrint = () => {
@@ -123,6 +240,43 @@ const OrderConfirmationPage = () => {
     a.click();
     document.body.removeChild(a);
     window.URL.revokeObjectURL(url);
+  };
+
+  const downloadOrderDocument = async (documentType) => {
+    try {
+      const token = localStorage.getItem('token') || localStorage.getItem('access_token');
+      const phone = customerInfo?.phone ? `?phone=${encodeURIComponent(customerInfo.phone)}` : '';
+      const response = await fetch(
+        `/api/orders/orders/${encodeURIComponent(displayOrderNumber)}/${documentType}${phone}`,
+        {
+          method: 'GET',
+          headers: token ? { Authorization: `Bearer ${token}` } : {}
+        }
+      );
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Failed to download ${documentType}`);
+      }
+
+      const blob = await response.blob();
+      const disposition = response.headers.get('Content-Disposition') || '';
+      const defaultName = `${documentType}-${displayOrderNumber}.html`;
+      const fileNameMatch = disposition.match(/filename=([^;]+)/i);
+      const fileName = fileNameMatch ? fileNameMatch[1].replace(/"/g, '').trim() : defaultName;
+
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Document download failed:', error);
+      alert(error.message || 'Failed to download document');
+    }
   };
 
   // Calculate item price helper
@@ -284,7 +438,7 @@ const OrderConfirmationPage = () => {
             )}
             
             {/* Action Buttons */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-8">
               <button
                 onClick={handlePrint}
                 className="flex flex-col items-center justify-center p-4 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
@@ -299,6 +453,22 @@ const OrderConfirmationPage = () => {
               >
                 <FaReceipt className="text-2xl text-gray-700 mb-2" />
                 <span className="text-sm font-medium text-gray-900">Download Receipt</span>
+              </button>
+
+              <button
+                onClick={() => downloadOrderDocument('invoice')}
+                className="flex flex-col items-center justify-center p-4 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                <FaReceipt className="text-2xl text-gray-700 mb-2" />
+                <span className="text-sm font-medium text-gray-900">Download Invoice</span>
+              </button>
+
+              <button
+                onClick={() => downloadOrderDocument('delivery-note')}
+                className="flex flex-col items-center justify-center p-4 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                <FaTruck className="text-2xl text-gray-700 mb-2" />
+                <span className="text-sm font-medium text-gray-900">Delivery Note</span>
               </button>
               
               <button
@@ -344,6 +514,51 @@ const OrderConfirmationPage = () => {
                 Please have your order number <strong>{displayOrderNumber}</strong> ready when contacting support.
               </p>
             </div>
+          </div>
+
+          {/* Recommended Products */}
+          <div className="mt-12">
+            <h2 className="text-2xl font-bold text-gray-900 mb-6">You might also like</h2>
+
+            {suggestionsLoading ? (
+              <div className="text-center text-gray-500">Loading suggestions...</div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+                {suggestedProducts && suggestedProducts.length > 0 ? (
+                  suggestedProducts.map((p) => (
+                    <Link
+                      to={`/product/${p.id}`}
+                      key={p.id}
+                      className="bg-white border rounded-lg p-4 hover:shadow-md transition-shadow flex flex-col items-center text-center"
+                    >
+                      <div className="w-full h-40 mb-3 overflow-hidden rounded">
+                        {p.image_urls && p.image_urls[0] ? (
+                          <img
+                            src={`/api/uploads/products/${p.image_urls[0].split('/').pop()}`}
+                            alt={p.name}
+                            className="w-full h-full object-cover"
+                            onError={(e) => { e.target.onerror = null; e.target.src = PLACEHOLDER_IMAGE; }}
+                          />
+                        ) : (
+                          <div className="w-full h-full bg-gray-100 flex items-center justify-center">
+                            <span className="text-gray-400">No Image</span>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex-1 w-full">
+                        <p className="font-medium text-gray-900 line-clamp-2">{p.name}</p>
+                        <p className="text-sm text-gray-600 mt-2">KSh {formatCurrency(getItemPrice(p))}</p>
+                      </div>
+                    </Link>
+                  ))
+                ) : (
+                  <div className="bg-gray-100 rounded-lg p-4 text-center">
+                    <p className="text-gray-500">Suggested products will appear here</p>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           
           {/* Navigation Buttons */}

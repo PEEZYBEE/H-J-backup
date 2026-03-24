@@ -3,7 +3,7 @@ import React, { useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { 
   FaCheckCircle, FaPrint, FaWhatsapp, FaEnvelope,
-  FaHome, FaShoppingBag, FaReceipt, FaPhone
+  FaHome, FaShoppingBag, FaReceipt, FaPhone, FaTruck
 } from 'react-icons/fa';
 
 const PaymentSuccessPage = () => {
@@ -91,6 +91,43 @@ const PaymentSuccessPage = () => {
     window.URL.revokeObjectURL(url);
   };
 
+  const downloadOrderDocument = async (documentType) => {
+    try {
+      const token = localStorage.getItem('token') || localStorage.getItem('access_token');
+      const phone = customerInfo?.phone ? `?phone=${encodeURIComponent(customerInfo.phone)}` : '';
+      const response = await fetch(
+        `/api/orders/orders/${encodeURIComponent(orderId)}/${documentType}${phone}`,
+        {
+          method: 'GET',
+          headers: token ? { Authorization: `Bearer ${token}` } : {}
+        }
+      );
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Failed to download ${documentType}`);
+      }
+
+      const blob = await response.blob();
+      const disposition = response.headers.get('Content-Disposition') || '';
+      const defaultName = `${documentType}-${orderId || 'order'}.html`;
+      const fileNameMatch = disposition.match(/filename=([^;]+)/i);
+      const fileName = fileNameMatch ? fileNameMatch[1].replace(/"/g, '').trim() : defaultName;
+
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Document download failed:', error);
+      alert(error.message || 'Failed to download document');
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 py-12">
       <div className="container mx-auto px-4">
@@ -174,7 +211,7 @@ const PaymentSuccessPage = () => {
             </div>
             
             {/* Action Buttons */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-8">
               <button
                 onClick={handlePrint}
                 className="flex flex-col items-center justify-center p-4 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
@@ -189,6 +226,22 @@ const PaymentSuccessPage = () => {
               >
                 <FaReceipt className="text-2xl text-gray-700 mb-2" />
                 <span className="text-sm font-medium text-gray-900">Download Receipt</span>
+              </button>
+
+              <button
+                onClick={() => downloadOrderDocument('invoice')}
+                className="flex flex-col items-center justify-center p-4 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                <FaReceipt className="text-2xl text-gray-700 mb-2" />
+                <span className="text-sm font-medium text-gray-900">Download Invoice</span>
+              </button>
+
+              <button
+                onClick={() => downloadOrderDocument('delivery-note')}
+                className="flex flex-col items-center justify-center p-4 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                <FaTruck className="text-2xl text-gray-700 mb-2" />
+                <span className="text-sm font-medium text-gray-900">Delivery Note</span>
               </button>
               
               <button

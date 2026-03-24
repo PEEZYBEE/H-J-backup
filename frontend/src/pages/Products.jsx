@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { 
   FaEye, FaEdit, FaTrash, FaPlus, FaSearch, FaFilter, 
-  FaBoxOpen, FaTimes, FaSave, FaTag, FaPercent 
+  FaBoxOpen, FaTimes, FaSave, FaTag, FaPercent, FaUpload, FaImage, FaVideo, FaPlay
 } from 'react-icons/fa';
 
 const Products = () => {
@@ -14,6 +14,19 @@ const Products = () => {
   const [editingProduct, setEditingProduct] = useState(null);
   const [editForm, setEditForm] = useState({});
   const [categories, setCategories] = useState([]);
+  const [uploadingImages, setUploadingImages] = useState(false);
+  const [uploadingVideos, setUploadingVideos] = useState(false);
+  const imageInputRef = useRef(null);
+  const videoInputRef = useRef(null);
+
+  const toMediaPreviewUrl = (url, folder) => {
+    if (!url) return '';
+    if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('blob:')) return url;
+    if (url.startsWith('/api/uploads/')) return url;
+    if (url.startsWith('/static/uploads/')) return url.replace('/static/uploads/', '/api/uploads/');
+    const fileName = url.split('/').pop();
+    return `/api/uploads/${folder}/${fileName}`;
+  };
 
   useEffect(() => {
     fetchProducts();
@@ -22,17 +35,43 @@ const Products = () => {
 
   const fetchProducts = async () => {
     try {
+      setLoading(true);
+      setError(null);
       const token = localStorage.getItem('token');
-      const response = await fetch('/api/products/products', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
+      const pageSize = 200;
+      let offset = 0;
+      let total = null;
+      let allProducts = [];
 
-      if (!response.ok) throw new Error('Failed to fetch products');
-      const data = await response.json();
-      setProducts(data.products || data);
-      setLoading(false);
+      // Pull every page so search/filter can run against the full catalog.
+      while (total === null || allProducts.length < total) {
+        const response = await fetch(`/api/products/products?limit=${pageSize}&offset=${offset}`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        if (!response.ok) throw new Error('Failed to fetch products');
+        const data = await response.json();
+        const pageProducts = data.products || [];
+
+        allProducts = [...allProducts, ...pageProducts];
+
+        if (typeof data.total === 'number') {
+          total = data.total;
+        } else {
+          break;
+        }
+
+        if (pageProducts.length < pageSize) {
+          break;
+        }
+
+        offset += pageSize;
+      }
+
+      setProducts(allProducts);
     } catch (err) {
       setError(err.message);
+    } finally {
       setLoading(false);
     }
   };
@@ -49,6 +88,25 @@ const Products = () => {
       console.error('Error fetching categories:', error);
     }
   };
+
+  const filteredProducts = products.filter(product => {
+    const query = searchQuery.toLowerCase().trim();
+    const matchesSearch =
+      !query ||
+      product.name?.toLowerCase().includes(query) ||
+      product.sku?.toLowerCase().includes(query) ||
+      product.description?.toLowerCase().includes(query) ||
+      product.brand?.toLowerCase().includes(query) ||
+      product.barcode?.toLowerCase().includes(query);
+
+    if (!matchesSearch) return false;
+
+    if (filter === 'in-stock') return product.stock_quantity > 0;
+    if (filter === 'low-stock') return product.stock_quantity > 0 && product.stock_quantity <= product.min_stock_level;
+    if (filter === 'out-of-stock') return product.stock_quantity === 0;
+
+    return true;
+  });
 
   const handleDelete = async (productId) => {
     if (!window.confirm('Are you sure you want to delete this product?')) return;
@@ -81,8 +139,172 @@ const Products = () => {
       min_stock_level: product.min_stock_level ?? 5,
       offer_price: product.offer_price ?? '',
       discount_percentage: product.discount_percentage ?? '',
-      is_on_offer: product.is_on_offer || false
+      is_on_offer: product.is_on_offer || false,
+      image_urls: Array.isArray(product.image_urls) ? product.image_urls : [],
+      video_urls: Array.isArray(product.video_urls) ? product.video_urls : []
     });
+  };
+
+  const uploadEditImages = async (files) => {
+    const token = localStorage.getItem('token');
+    const multiData = new FormData();
+    files.forEach((file) => multiData.append('images', file));
+    multiData.append('folder', 'products');
+
+    const multiResponse = await fetch('/api/products/upload/multiple', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: multiData
+    });
+
+    if (multiResponse.ok) {
+      const data = await multiResponse.json();
+      return data.imageUrls || [];
+    }
+
+    // Fallback to single image uploads if multiple upload endpoint fails.
+    const uploaded = [];
+    for (const file of files) {
+      const singleData = new FormData();
+      singleData.append('image', file);
+      singleData.append('folder', 'products');
+      const singleResponse = await fetch('/api/products/upload', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: singleData
+      });
+      if (!singleResponse.ok) {
+        throw new Error(`Failed to upload ${file.name}`);
+      }
+      const singlePayload = await singleResponse.json();
+      uploaded.push(singlePayload.imageUrl);
+    }
+    return uploaded;
+  };
+
+  const handleEditImageSelect = async (e) => {
+    const files = Array.from(e.target.files || []);
+    const validFiles = files.filter((file) => {
+      const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif'];
+      const maxSize = 5 * 1024 * 1024;
+      if (!validTypes.includes(file.type)) {
+        alert(`${file.name} is not a valid image type`);
+        return false;
+      }
+      if (file.size > maxSize) {
+        alert(`${file.name} is larger than 5MB`);
+        return false;
+      }
+      return true;
+    });
+
+    if (validFiles.length === 0) {
+      e.target.value = '';
+      return;
+    }
+
+    try {
+      setUploadingImages(true);
+      const uploadedUrls = await uploadEditImages(validFiles);
+      setEditForm((prev) => ({
+        ...prev,
+        image_urls: [...(prev.image_urls || []), ...uploadedUrls]
+      }));
+    } catch (err) {
+      console.error('Error uploading images:', err);
+      alert(`Error uploading images: ${err.message}`);
+    } finally {
+      setUploadingImages(false);
+      e.target.value = '';
+    }
+  };
+
+  const removeEditImage = (index) => {
+    setEditForm((prev) => ({
+      ...prev,
+      image_urls: (prev.image_urls || []).filter((_, i) => i !== index)
+    }));
+  };
+
+  const uploadEditVideos = async (files) => {
+    const token = localStorage.getItem('token');
+    const multiData = new FormData();
+    files.forEach((file) => multiData.append('videos', file));
+    multiData.append('folder', 'product_videos');
+
+    const multiResponse = await fetch('/api/products/upload/videos', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: multiData
+    });
+
+    if (multiResponse.ok) {
+      const data = await multiResponse.json();
+      return data.videoUrls || [];
+    }
+
+    // Fallback to single video uploads if multiple upload endpoint fails.
+    const uploaded = [];
+    for (const file of files) {
+      const singleData = new FormData();
+      singleData.append('video', file);
+      singleData.append('folder', 'product_videos');
+      const singleResponse = await fetch('/api/products/upload/video', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: singleData
+      });
+      if (!singleResponse.ok) {
+        throw new Error(`Failed to upload ${file.name}`);
+      }
+      const singlePayload = await singleResponse.json();
+      uploaded.push(singlePayload.videoUrl);
+    }
+    return uploaded;
+  };
+
+  const handleEditVideoSelect = async (e) => {
+    const files = Array.from(e.target.files || []);
+    const validFiles = files.filter((file) => {
+      const validTypes = ['video/mp4', 'video/webm', 'video/ogg', 'video/quicktime'];
+      const maxSize = 50 * 1024 * 1024;
+      if (!validTypes.includes(file.type)) {
+        alert(`${file.name} is not a supported video type`);
+        return false;
+      }
+      if (file.size > maxSize) {
+        alert(`${file.name} is larger than 50MB`);
+        return false;
+      }
+      return true;
+    });
+
+    if (validFiles.length === 0) {
+      e.target.value = '';
+      return;
+    }
+
+    try {
+      setUploadingVideos(true);
+      const uploadedUrls = await uploadEditVideos(validFiles);
+      setEditForm((prev) => ({
+        ...prev,
+        video_urls: [...(prev.video_urls || []), ...uploadedUrls]
+      }));
+    } catch (err) {
+      console.error('Error uploading videos:', err);
+      alert(`Error uploading videos: ${err.message}`);
+    } finally {
+      setUploadingVideos(false);
+      e.target.value = '';
+    }
+  };
+
+  const removeEditVideo = (index) => {
+    setEditForm((prev) => ({
+      ...prev,
+      video_urls: (prev.video_urls || []).filter((_, i) => i !== index)
+    }));
   };
 
   const handleEditChange = (e) => {
@@ -110,7 +332,9 @@ const Products = () => {
         stock_quantity: editForm.stock_quantity !== '' ? parseInt(editForm.stock_quantity, 10) : 0,
         min_stock_level: editForm.min_stock_level !== '' ? parseInt(editForm.min_stock_level, 10) : 5,
         offer_price: editForm.offer_price !== '' ? parseFloat(editForm.offer_price) : null,
-        discount_percentage: editForm.discount_percentage !== '' ? parseInt(editForm.discount_percentage, 10) : null
+        discount_percentage: editForm.discount_percentage !== '' ? parseInt(editForm.discount_percentage, 10) : null,
+        image_urls: (editForm.image_urls || []).filter((url) => typeof url === 'string' && url.trim()),
+        video_urls: (editForm.video_urls || []).filter((url) => typeof url === 'string' && url.trim())
       };
       
       console.log('Sending update data:', dataToSend);
@@ -144,19 +368,9 @@ const Products = () => {
   const handleCancelEdit = () => {
     setEditingProduct(null);
     setEditForm({});
+    setUploadingImages(false);
+    setUploadingVideos(false);
   };
-
-  const filteredProducts = products.filter(product => {
-    const matchesSearch = product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         product.sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         product.description.toLowerCase().includes(searchQuery.toLowerCase());
-    
-    if (filter === 'in-stock') return matchesSearch && product.stock_quantity > 0;
-    if (filter === 'low-stock') return matchesSearch && product.stock_quantity > 0 && product.stock_quantity <= product.min_stock_level;
-    if (filter === 'out-of-stock') return matchesSearch && product.stock_quantity === 0;
-    
-    return matchesSearch;
-  });
 
   if (loading) return (
     <div className="flex justify-center items-center h-64">
@@ -541,6 +755,102 @@ const Products = () => {
                     </div>
                   </div>
                 )}
+              </div>
+
+              {/* Media Section */}
+              <div className="border-t pt-6 space-y-6">
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                    <FaImage className="text-blue-600" /> Product Images
+                  </h3>
+                  <input
+                    type="file"
+                    ref={imageInputRef}
+                    onChange={handleEditImageSelect}
+                    accept="image/jpeg,image/jpg,image/png,image/webp,image/gif"
+                    multiple
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => imageInputRef.current?.click()}
+                    disabled={uploadingImages}
+                    className="mb-3 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+                  >
+                    <FaUpload /> {uploadingImages ? 'Uploading...' : 'Add Images'}
+                  </button>
+
+                  {(editForm.image_urls || []).length > 0 && (
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                      {(editForm.image_urls || []).map((url, index) => (
+                        <div key={`edit-image-${index}`} className="relative group">
+                          <img
+                            src={toMediaPreviewUrl(url, 'products')}
+                            alt={`Product image ${index + 1}`}
+                            className="w-full h-28 object-cover rounded-lg border border-gray-200"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => removeEditImage(index)}
+                            className="absolute top-2 right-2 p-1.5 bg-red-600 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                            title="Remove image"
+                          >
+                            <FaTrash />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                    <FaVideo className="text-red-600" /> Product Videos
+                  </h3>
+                  <input
+                    type="file"
+                    ref={videoInputRef}
+                    onChange={handleEditVideoSelect}
+                    accept="video/mp4,video/webm,video/ogg,video/quicktime"
+                    multiple
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => videoInputRef.current?.click()}
+                    disabled={uploadingVideos}
+                    className="mb-3 bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 disabled:opacity-50 flex items-center gap-2"
+                  >
+                    <FaUpload /> {uploadingVideos ? 'Uploading...' : 'Add Videos'}
+                  </button>
+
+                  {(editForm.video_urls || []).length > 0 && (
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                      {(editForm.video_urls || []).map((url, index) => (
+                        <div key={`edit-video-${index}`} className="relative group">
+                          <div className="w-full h-28 bg-gray-100 rounded-lg border border-gray-200 relative overflow-hidden">
+                            <video
+                              src={toMediaPreviewUrl(url, 'product_videos')}
+                              className="w-full h-full object-cover"
+                              muted
+                            />
+                            <div className="absolute inset-0 bg-black bg-opacity-20 flex items-center justify-center">
+                              <FaPlay className="text-white" />
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => removeEditVideo(index)}
+                            className="absolute top-2 right-2 p-1.5 bg-red-600 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                            title="Remove video"
+                          >
+                            <FaTrash />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 

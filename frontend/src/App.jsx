@@ -54,6 +54,8 @@ import PaymentPendingPage from './website/pages/PaymentPendingPage';
 // CSS imports for Vite
 import './index.css';
 
+import ToastContainer from './components/ui/ToastContainer';
+
 // Helper component to check user role and redirect
 const DashboardOrRedirect = () => {
   const user = JSON.parse(localStorage.getItem('user') || '{}');
@@ -70,6 +72,7 @@ const DashboardOrRedirect = () => {
 function App() {
   return (
     <CartProvider>
+      <ToastContainer />
       <Router>
         <Routes>
           {/* === WEBSITE (Public) === */}

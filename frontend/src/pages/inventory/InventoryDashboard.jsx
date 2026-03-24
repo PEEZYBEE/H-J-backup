@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Package, Truck, CheckCircle, AlertCircle, TrendingUp, RefreshCw, DollarSign, Users } from 'lucide-react';
-import { getSuppliers, getPendingBatches, getMyBatches, getAllProducts } from '../../services/api';
+import { productsAPI, receivingAPI } from '../../services/api';
 
 const InventoryDashboard = () => {
   const [stats, setStats] = useState({
@@ -23,19 +23,19 @@ const InventoryDashboard = () => {
       setLoading(true);
       
       // Fetch products
-      const productsRes = await getAllProducts();
+      const productsRes = await productsAPI.getAllProducts();
       const products = productsRes.products || productsRes.data?.products || [];
       
       // Fetch pending batches
-      const batchesRes = await getPendingBatches();
+      const batchesRes = await receivingAPI.getPendingBatches();
       const batches = batchesRes.batches || [];
       
       // Fetch suppliers
-      const suppliersRes = await getSuppliers();
+      const suppliersRes = await receivingAPI.getSuppliers();
       const suppliers = suppliersRes.suppliers || [];
       
       // Fetch recent batches
-      const myBatchesRes = await getMyBatches();
+      const myBatchesRes = await receivingAPI.getMyBatches();
       const myBatches = myBatchesRes.batches || [];
       
       // Calculate statistics

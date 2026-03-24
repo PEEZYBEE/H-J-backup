@@ -13,7 +13,7 @@ from flask_socketio import SocketIO
 from flask_bcrypt import Bcrypt
 
 # Initialize extensions
-db = SQLAlchemy()
+from models import db
 mail = Mail()
 socketio = SocketIO()
 bcrypt = Bcrypt()
@@ -21,18 +21,30 @@ jwt = JWTManager()
 
 def create_app():
     app = Flask(__name__)
+    flask_env = os.getenv('FLASK_ENV', 'development').lower()
+    is_production = flask_env == 'production'
+    app.config['IS_PRODUCTION'] = is_production
     
     # Session configuration for cart
-    app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-session-secret-key-change-this')
+    secret_key = os.getenv('SECRET_KEY')
+    if is_production and not secret_key:
+        raise RuntimeError('SECRET_KEY must be set in production')
+    app.config['SECRET_KEY'] = secret_key or 'dev-session-secret-key'
     app.config['SESSION_TYPE'] = 'filesystem'
     app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
     
     # Database configuration
-    app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'postgresql://hnj_user:hnj_password@localhost/hnj_store')
+    database_url = os.getenv('DATABASE_URL')
+    if is_production and not database_url:
+        raise RuntimeError('DATABASE_URL must be set in production')
+    app.config['SQLALCHEMY_DATABASE_URI'] = database_url or 'postgresql://hnj_user:hnj_password@localhost/hnj_store'
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     
     # JWT configuration
-    app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'your-super-secret-jwt-key-change-this')
+    jwt_secret_key = os.getenv('JWT_SECRET_KEY')
+    if is_production and not jwt_secret_key:
+        raise RuntimeError('JWT_SECRET_KEY must be set in production')
+    app.config['JWT_SECRET_KEY'] = jwt_secret_key or 'dev-jwt-secret-key'
     app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=24)
     app.config['JWT_TOKEN_LOCATION'] = ['headers']
     app.config['JWT_HEADER_NAME'] = 'Authorization'
@@ -72,14 +84,21 @@ def create_app():
     migrate = Migrate(app, db)
     jwt.init_app(app)
     bcrypt.init_app(app)
+    # ============ RATE LIMITING: Flask-Limiter integration =============
+    try:
+        from flask_limiter import Limiter
+        from flask_limiter.util import get_remote_address
+        # Default limits (can be overridden per-route or per-blueprint)
+        limiter = Limiter(key_func=get_remote_address, default_limits=["200 per day", "50 per hour"]) 
+        limiter.init_app(app)
+    except Exception:
+        limiter = None
     
-    # Import models after db is initialized
-    from models import TokenBlocklist
-    
-    # Check if token is blacklisted
+    # Check if token is blacklisted (import inside function to avoid circular imports)
     @jwt.token_in_blocklist_loader
     def check_if_token_revoked(jwt_header, jwt_payload):
         jti = jwt_payload["jti"]
+        from models import TokenBlocklist
         token = TokenBlocklist.query.filter_by(jti=jti).first()
         return token is not None
     
@@ -94,6 +113,17 @@ def create_app():
     from views.mpesa_routes import mpesa_bp
     from views.receiving_routes import receiving_bp
     from views.errand_routes import errand_bp
+    from views.notification_routes import notification_bp
+
+    # Apply stricter limits to high-risk blueprints
+    try:
+        if limiter is not None:
+            limiter.limit("10 per minute")(auth_bp)
+            limiter.limit("20 per minute")(payment_bp)
+            limiter.limit("30 per minute")(mpesa_bp)
+    except Exception:
+        # Non-fatal: blueprints may already be registered or limiter unavailable
+        pass
     
     # Register blueprints with appropriate prefixes
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
@@ -106,6 +136,7 @@ def create_app():
     app.register_blueprint(mpesa_bp, url_prefix="/api/mpesa")
     app.register_blueprint(receiving_bp, url_prefix="/api")
     app.register_blueprint(errand_bp, url_prefix='/api')
+    app.register_blueprint(notification_bp, url_prefix='/api')
     
     # Health check endpoint
     @app.route("/api/health")
@@ -113,16 +144,17 @@ def create_app():
         return {"status": "healthy", "service": "hnj", "version": "1.0"}
     
     # Debug endpoints
-    @app.route("/api/debug/routes")
-    def debug_routes():
-        routes = []
-        for rule in app.url_map.iter_rules():
-            routes.append({
-                'endpoint': rule.endpoint,
-                'methods': list(rule.methods),
-                'path': str(rule)
-            })
-        return jsonify({'routes': sorted(routes, key=lambda x: x['path'])})
+    if not is_production:
+        @app.route("/api/debug/routes")
+        def debug_routes():
+            routes = []
+            for rule in app.url_map.iter_rules():
+                routes.append({
+                    'endpoint': rule.endpoint,
+                    'methods': list(rule.methods),
+                    'path': str(rule)
+                })
+            return jsonify({'routes': sorted(routes, key=lambda x: x['path'])})
     
     @app.route('/')
     def home():
@@ -178,25 +210,109 @@ def create_app():
                       "https://supervital-unstoried-trace.ngrok-free.dev"
                   ], 
                   async_mode='eventlet')
+
+    # ============ INPUT SANITIZATION: populate sanitized request data ==========
+    # Attach sanitized inputs to `flask.g` for handlers to use.
+    # NOTE: We avoid monkey-patching `request` internals which is brittle.
+    from flask import g, request as _flask_request
+    from utils.input_sanitizer import sanitize_request_data
+
+    @app.before_request
+    def _sanitize_inputs():
+        sanitized = sanitize_request_data(_flask_request)
+        # Attach sanitized copies to flask.g for route handlers to use
+        g.sanitized_json = sanitized.get('json')
+        g.sanitized_args = sanitized.get('args')
+        g.sanitized_form = sanitized.get('form')
+
     
-    # Create database tables on startup
-    with app.app_context():
-        db.create_all()
-        print("=" * 60)
-        print("DATABASE TABLES CREATED SUCCESSFULLY!")
-        print("=" * 60)
-        
-        # Check if we have any products
-        from models import Product
-        product_count = Product.query.count()
-        print(f"Products in database: {product_count}")
-        
-        if product_count == 0:
-            print("No products found. You can create some via the admin panel.")
+    
+    # Optional DB bootstrap for local development only.
+    should_create_db = os.getenv('AUTO_CREATE_DB', 'false').lower() == 'true'
+    if should_create_db and not is_production:
+        with app.app_context():
+            db.create_all()
+            print("=" * 60)
+            print("DATABASE TABLES CREATED SUCCESSFULLY!")
+            print("=" * 60)
+            
+            # Check if we have any products
+            from models import Product
+            product_count = Product.query.count()
+            print(f"Products in database: {product_count}")
+            
+            if product_count == 0:
+                print("No products found. You can create some via the admin panel.")
     
     return app
 
 app = create_app()
 
+# ============ FRAPPE INTEGRATION ROUTES ============
+from flask import request
+from frappe_integration import FrappeClient
+frappe = FrappeClient()
+
+@app.route('/test-frappe-connection')
+def test_frappe_connection():
+    try:
+        success = frappe.login()
+        return jsonify({
+            'connected': success,
+            'message': 'Connected to Frappe!' if success else 'Failed to connect'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/sync-customer', methods=['POST'])
+def sync_customer():
+    try:
+        from flask import g
+        customer_data = getattr(g, 'sanitized_json', None) or request.get_json(silent=True)
+        result = frappe.create_customer(customer_data)
+        return jsonify({'success': True, 'frappe_response': result})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/sync-order', methods=['POST'])
+def sync_order():
+    try:
+        from flask import g
+        order_data = getattr(g, 'sanitized_json', None) or request.get_json(silent=True)
+        result = frappe.create_sales_order(order_data)
+        return jsonify({'success': True, 'frappe_response': result})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/sync-product', methods=['POST'])
+def sync_product():
+    try:
+        from flask import g
+        product_data = getattr(g, 'sanitized_json', None) or request.get_json(silent=True)
+        result = frappe.create_item(product_data)
+        return jsonify({'success': True, 'frappe_response': result})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/check-inventory', methods=['GET'])
+def check_inventory():
+    try:
+        from flask import g
+        sku = None
+        args = getattr(g, 'sanitized_args', None)
+        if args:
+            _sku = args.get('sku')
+            if isinstance(_sku, list):
+                sku = _sku[0] if len(_sku) > 0 else None
+            else:
+                sku = _sku
+        if sku is None:
+            sku = request.args.get('sku')
+        result = frappe.get_inventory(sku)
+        return jsonify({'success': True, 'frappe_response': result})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 if __name__ == "__main__":
-    socketio.run(app, debug=True, host="0.0.0.0", port=5000)
+    is_production = os.getenv('FLASK_ENV', 'development').lower() == 'production'
+    socketio.run(app, debug=not is_production, host="0.0.0.0", port=5000)

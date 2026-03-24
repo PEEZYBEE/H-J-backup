@@ -3,7 +3,6 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from datetime import datetime
 import random
 import string
-from app import db
 from models import Cart, CartItem, Product
 
 cart_bp = Blueprint('cart', __name__)
@@ -24,6 +23,7 @@ def get_or_create_cart():
     if session.get('user_id'):
         cart.user_id = session['user_id']
     cart.session_id = session.get('session_id', generate_session_id())
+    from models import db
     db.session.add(cart)
     db.session.commit()
     
@@ -80,9 +80,10 @@ def add_to_cart():
                 product_id=product_id, 
                 quantity=quantity
             )
+            from models import db
             db.session.add(cart_item)
-        
-        db.session.commit()
+
+            db.session.commit()
         return jsonify(cart.to_dict()), 200
         
     except Exception as e:
@@ -113,6 +114,7 @@ def update_cart_item(item_id):
             }), 400
         
         cart_item.quantity = quantity
+        from models import db
         db.session.commit()
         
         return jsonify(cart.to_dict()), 200
@@ -133,6 +135,7 @@ def remove_cart_item(item_id):
             return jsonify({'error': 'Unauthorized'}), 403
         
         db.session.delete(cart_item)
+        from models import db
         db.session.commit()
         
         return jsonify({
@@ -154,6 +157,7 @@ def clear_cart():
         if session.get('user_id') and cart.user_id and cart.user_id != session.get('user_id'):
             return jsonify({'error': 'Unauthorized'}), 403
         
+        from models import db
         CartItem.query.filter_by(cart_id=cart.id).delete()
         db.session.commit()
         

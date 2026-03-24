@@ -78,6 +78,17 @@ const ShopPage = () => {
     return product.is_on_offer && getProductPrice(product) < getRegularPrice(product);
   };
 
+  const getProductCategoryId = (product) => {
+    if (!product) return null;
+    if (product.category_id !== undefined && product.category_id !== null) {
+      return Number(product.category_id);
+    }
+    if (product.category?.id !== undefined && product.category?.id !== null) {
+      return Number(product.category.id);
+    }
+    return null;
+  };
+
   // Get URL parameters
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -138,8 +149,9 @@ const ShopPage = () => {
 
     // Category filter
     if (selectedCategory !== 'all') {
+      const selectedCategoryId = parseInt(selectedCategory);
       filtered = filtered.filter(product => 
-        product.category_id === parseInt(selectedCategory)
+        getProductCategoryId(product) === selectedCategoryId
       );
     }
 

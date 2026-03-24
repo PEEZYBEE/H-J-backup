@@ -2,6 +2,11 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
+const HMR_HOST = process.env.VITE_HMR_HOST
+const HMR_PROTOCOL = process.env.VITE_HMR_PROTOCOL || 'wss'
+const HMR_CLIENT_PORT = Number(process.env.VITE_HMR_CLIENT_PORT || 443)
+const PUBLIC_TUNNEL_HOST = process.env.VITE_PUBLIC_TUNNEL_HOST
+
 export default defineConfig({
   plugins: [
     tailwindcss(),
@@ -13,35 +18,23 @@ export default defineConfig({
   ],
   server: {
     port: 5173,
-    host: '0.0.0.0', // Listen on all addresses
+    host: '127.0.0.1', // Use 127.0.0.1 to match Google OAuth authorized origins
     allowedHosts: [
-      'supervital-unstoried-trace.ngrok-free.dev',
-      '.ngrok-free.dev'  // Allow all ngrok-free.dev subdomains
+      '.ngrok-free.dev', // Allow all ngrok-free.dev subdomains
+      ...(PUBLIC_TUNNEL_HOST ? [PUBLIC_TUNNEL_HOST] : [])
     ],
-    hmr: {
-      // Use the same host as the server for HMR
-      host: 'supervital-unstoried-trace.ngrok-free.dev',
-      protocol: 'wss', // Use wss for HTTPS
-      clientPort: 443, // Standard HTTPS port
-    },
+    hmr: HMR_HOST
+      ? {
+          host: HMR_HOST,
+          protocol: HMR_PROTOCOL,
+          clientPort: HMR_CLIENT_PORT,
+        }
+      : undefined,
     proxy: {
-      // Proxy /api requests to your Flask backend
       '/api': {
-        target: 'http://localhost:5000', // Your backend
+        target: 'http://localhost:5000',
         changeOrigin: true,
         secure: false,
-        rewrite: (path) => path, // Keep the path as is
-        configure: (proxy, _options) => {
-          proxy.on('error', (err, _req, _res) => {
-            console.log('proxy error', err);
-          });
-          proxy.on('proxyReq', (proxyReq, req, _res) => {
-            console.log('Sending Request to the Target:', req.method, req.url);
-          });
-          proxy.on('proxyRes', (proxyRes, req, _res) => {
-            console.log('Received Response from the Target:', proxyRes.statusCode, req.url);
-          });
-        },
       },
     },
   },

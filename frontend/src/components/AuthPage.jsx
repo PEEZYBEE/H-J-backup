@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { FaEye, FaEyeSlash, FaUser, FaEnvelope, FaLock, FaPhone } from 'react-icons/fa';
-import { login, register } from '../services/api';
+import { login, register, googleAuth } from '../services/api';
 import './AuthPage.css';
 
 const AuthPage = () => {
@@ -23,15 +23,20 @@ const AuthPage = () => {
     confirmPassword: '',
     full_name: '',
     phone: '',
-    role: 'customer'
+    role: 'cashier'
   });
   const [showRegPwd, setShowRegPwd] = useState(false);
   const [showConfirmPwd, setShowConfirmPwd] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [googleReady, setGoogleReady] = useState(false);
+  const googleActionRef = useRef('login');
+  const googleLoginBtnRef = useRef(null);
+  const googleRegisterBtnRef = useRef(null);
 
   // CORRECTED: Backend URL set to 5000
   const backendUrl = 'http://localhost:5000';
+  const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
   useEffect(() => {
     const form = searchParams.get('form');
@@ -46,11 +51,114 @@ const AuthPage = () => {
       confirmPassword: '',
       full_name: '',
       phone: '',
-      role: 'customer'
+      role: 'cashier'
     });
     setError('');
     setSuccess('');
   }, [searchParams]);
+
+  useEffect(() => {
+    if (!googleClientId) {
+      setGoogleReady(false);
+      return;
+    }
+
+    const existingScript = document.getElementById('google-identity-script');
+    if (existingScript && window.google?.accounts?.id) {
+      setGoogleReady(true);
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.id = 'google-identity-script';
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.defer = true;
+    script.onload = () => setGoogleReady(Boolean(window.google?.accounts?.id));
+    script.onerror = () => setGoogleReady(false);
+    document.body.appendChild(script);
+  }, [googleClientId]);
+
+  // Render Google buttons when SDK is ready or form switches
+  useEffect(() => {
+    if (!googleReady || !googleClientId || !window.google?.accounts?.id) return;
+
+    window.google.accounts.id.initialize({
+      client_id: googleClientId,
+      callback: (credentialResponse) => {
+        handleGoogleCredential(credentialResponse, googleActionRef.current);
+      }
+    });
+
+    // Render login button
+    if (googleLoginBtnRef.current) {
+      googleLoginBtnRef.current.innerHTML = '';
+      window.google.accounts.id.renderButton(googleLoginBtnRef.current, {
+        type: 'standard',
+        theme: 'outline',
+        size: 'large',
+        text: 'signin_with',
+        shape: 'rectangular',
+        width: 280
+      });
+    }
+
+    // Render register button
+    if (googleRegisterBtnRef.current) {
+      googleRegisterBtnRef.current.innerHTML = '';
+      window.google.accounts.id.renderButton(googleRegisterBtnRef.current, {
+        type: 'standard',
+        theme: 'outline',
+        size: 'large',
+        text: 'signup_with',
+        shape: 'rectangular',
+        width: 280
+      });
+    }
+  }, [googleReady, googleClientId, isLogin]);
+
+  const handleGoogleCredential = async (credentialResponse, action) => {
+    if (!credentialResponse?.credential) {
+      setError('Google authentication failed. Please try again.');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+    setSuccess('');
+
+    try {
+      const response = await googleAuth({
+        credential: credentialResponse.credential,
+        action,
+        role: action === 'register' ? registerData.role : undefined,
+        phone: action === 'register' ? registerData.phone : undefined
+      });
+
+      localStorage.setItem('token', response.access_token);
+      localStorage.setItem('user', JSON.stringify(response.user));
+
+      setSuccess(
+        action === 'register'
+          ? 'Google registration successful! Redirecting...'
+          : 'Google login successful! Redirecting...'
+      );
+
+      setTimeout(() => {
+        navigate('/dashboard');
+      }, 1000);
+    } catch (err) {
+      if (err.response?.data?.error) {
+        setError(err.response.data.error);
+      } else if (err.request) {
+        setError(`Cannot connect to server at ${backendUrl}. Please check if Flask server is running.`);
+      } else {
+        setError('Google authentication failed. Please try again.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const toggleForm = (type) => {
     setIsLogin(type === 'login');
@@ -70,7 +178,7 @@ const AuthPage = () => {
         confirmPassword: '',
         full_name: '',
         phone: '',
-        role: 'customer'
+        role: 'cashier'
       });
       setShowRegPwd(false);
       setShowConfirmPwd(false);
@@ -185,7 +293,7 @@ const AuthPage = () => {
         confirmPassword: '',
         full_name: '',
         phone: '',
-        role: 'customer'
+        role: 'cashier'
       });
       
     } catch (err) {
@@ -228,6 +336,26 @@ const AuthPage = () => {
       <div className="flex-grow">
         <div className="auth-container">
           <div className={`form-container ${isLogin ? '' : 'right-panel-active'}`}>
+
+            {/* ---------- MOBILE TAB SWITCHER (hidden on desktop) ---------- */}
+            <div className="mobile-auth-tabs">
+              <button
+                type="button"
+                className={`mobile-tab ${isLogin ? 'active' : ''}`}
+                onClick={() => toggleForm('login')}
+                disabled={loading}
+              >
+                Login
+              </button>
+              <button
+                type="button"
+                className={`mobile-tab ${!isLogin ? 'active' : ''}`}
+                onClick={() => toggleForm('register')}
+                disabled={loading}
+              >
+                Register
+              </button>
+            </div>
 
             {/* ---------- LOGIN FORM ---------- */}
             <form className="form login-form" onSubmit={handleLogin}>
@@ -286,10 +414,18 @@ const AuthPage = () => {
                 Forgot Password?
               </button>
 
-              <div className="mt-6 text-xs text-gray-500 text-center">
-                <p>Backend: {backendUrl}</p>
-                <p>Make sure Flask server is running</p>
+              <div className="social-login">
+                <p>or continue with</p>
+                <div
+                  ref={googleLoginBtnRef}
+                  onClick={() => { googleActionRef.current = 'login'; }}
+                  className="google-btn-container"
+                />
+                {!googleReady && googleClientId && (
+                  <p className="text-xs text-gray-400 mt-2">Loading Google Sign-In...</p>
+                )}
               </div>
+
             </form>
 
             {/* ---------- REGISTER FORM ---------- */}
@@ -418,7 +554,6 @@ const AuthPage = () => {
                     className="role-select"
                     disabled={loading}
                   >
-                    <option value="customer">Customer</option>
                     <option value="cashier">Cashier</option>
                     <option value="manager">Manager</option>
                     <option value="admin">Admin</option>
@@ -430,9 +565,16 @@ const AuthPage = () => {
                 {loading ? 'Creating Account...' : 'Register'}
               </button>
 
-              <div className="mt-4 text-xs text-gray-500 text-center">
-                <p>Your account will be saved to PostgreSQL database</p>
-                <p>All fields are required</p>
+              <div className="social-login">
+                <p>or continue with</p>
+                <div
+                  ref={googleRegisterBtnRef}
+                  onClick={() => { googleActionRef.current = 'register'; }}
+                  className="google-btn-container"
+                />
+                {!googleReady && googleClientId && (
+                  <p className="text-xs text-gray-400 mt-2">Loading Google Sign-In...</p>
+                )}
               </div>
             </form>
 
@@ -464,7 +606,6 @@ const AuthPage = () => {
       {/* Footer */}
       <div className="pb-6 text-center text-xs text-gray-500">
         <p>HNj Store Management System © 2024</p>
-        <p className="mt-1">Backend: Flask + PostgreSQL | Frontend: React + Vite</p>
       </div>
     </div>
   );

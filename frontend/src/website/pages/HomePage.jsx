@@ -33,6 +33,8 @@ import {
 } from 'react-icons/fa';
 import { productsAPI, categoriesAPI } from '../../services/api';
 
+const PLACEHOLDER_IMAGE = 'https://via.placeholder.com/600x600?text=No+Image';
+
 const HomePage = () => {
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -235,7 +237,43 @@ const HomePage = () => {
 
   // Helper function to navigate to category by code
   const navigateToCategory = (categoryCode) => {
-    const category = categories.find(c => c.code === categoryCode);
+    const normalizedCode = (categoryCode || '').toUpperCase().trim();
+
+    const legacyCodeMap = {
+      BTL: 'FBS',
+      FLK: 'FBS',
+      KEY: 'TPA',
+      UMB: 'TPA',
+      BAG: 'TPA',
+      ACC: 'TPA',
+      HOM: 'HOU',
+      CLN: 'HOU',
+      STA: 'SGI',
+      GFT: 'SGI',
+    };
+
+    const resolvedCode = legacyCodeMap[normalizedCode] || normalizedCode;
+
+    let category = categories.find(c => (c.code || '').toUpperCase() === resolvedCode);
+
+    if (!category) {
+      const keywordMap = {
+        KIT: ['kitchen'],
+        FBS: ['bottle', 'flask', 'food', 'beverage'],
+        TPA: ['travel', 'accessories', 'umbrella', 'key', 'bag'],
+        TOY: ['toy', 'games'],
+        HOU: ['home', 'organization', 'utility', 'clean'],
+        SGI: ['stationery', 'gift'],
+        PET: ['pet'],
+      };
+
+      const keywords = keywordMap[resolvedCode] || [];
+      category = categories.find(c => {
+        const text = `${c.name || ''} ${c.description || ''}`.toLowerCase();
+        return keywords.some(keyword => text.includes(keyword));
+      });
+    }
+
     if (category) {
       navigate(`/shop?category=${category.id}`);
     } else {
@@ -1137,7 +1175,11 @@ const HomePage = () => {
                                    product.stock_quantity <= 10 ? `Only ${product.stock_quantity} left` : '';
                 
                 return (
-                  <div key={product.id} className="bg-white rounded-xl shadow-lg hover:shadow-2xl transition-all duration-300 overflow-hidden group">
+                  <div
+                    key={product.id}
+                    className="bg-white rounded-xl shadow-lg hover:shadow-2xl transition-all duration-300 overflow-hidden group cursor-pointer"
+                    onClick={() => navigate(`/product/${product.id}`)}
+                  >
                     {/* Product Image */}
                     <div className="relative h-64 overflow-hidden">
                       {product.image_urls && product.image_urls.length > 0 ? (
@@ -1194,7 +1236,10 @@ const HomePage = () => {
                       
                       {/* Action Buttons */}
                       <button
-                        onClick={() => handleAddToCart(product)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleAddToCart(product);
+                        }}
                         disabled={product.stock_quantity === 0}
                         className={`w-full py-4 rounded-xl text-base font-bold transition-all duration-200 transform hover:scale-[1.02] ${
                           product.stock_quantity === 0
@@ -1207,6 +1252,7 @@ const HomePage = () => {
                       
                       <Link 
                         to={`/product/${product.id}`}
+                        onClick={(e) => e.stopPropagation()}
                         className="block text-center text-red-600 text-sm mt-3 hover:text-red-800 font-medium"
                       >
                         View Details →
@@ -1255,7 +1301,7 @@ const HomePage = () => {
             {/* Promo Banner */}
             <div className="bg-gradient-to-r from-red-600 to-pink-600 text-white rounded-lg shadow-md p-6 mt-6">
               <h3 className="font-bold text-xl mb-2">Special Offer!</h3>
-              <p className="text-base mb-4">Get 10% off your first order</p>
+              <p className="text-base mb-4">Welcome to HNj Store.</p>
               <button className="bg-white text-red-600 px-4 py-3 rounded-lg text-base font-bold w-full hover:bg-gray-100">
                 Shop Now →
               </button>

@@ -1,5 +1,5 @@
 // src/website/pages/CartPage.jsx - FIXED with safe price handling
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { FaTrash, FaShoppingCart, FaArrowLeft, FaCreditCard } from 'react-icons/fa';
 import { Link } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
@@ -290,11 +290,7 @@ const CartPage = () => {
                   <span className="font-semibold text-gray-900">KSh {formatCurrency(productTotal)}</span>
                 </div>
                 
-                {/* Shipping Note */}
-                <div className="text-sm text-gray-500 bg-gray-50 p-3 rounded-lg">
-                  <p className="font-medium text-gray-900 mb-1">Shipping </p>
-                  <p>Shipping costs will be calculated during checkout based on your delivery method and location.</p>
-                </div>
+                
               </div>
               
               {/* Total (Products Only) */}
@@ -305,9 +301,7 @@ const CartPage = () => {
                     KSh {formatCurrency(productTotal)}
                   </span>
                 </div>
-                <p className="text-gray-500 text-sm mt-2">
-                  Product total only. Shipping added at checkout.
-                </p>
+                
               </div>
               
               <div className="mt-6">
@@ -368,17 +362,148 @@ const CartPage = () => {
         </div>
         
         {/* Recommended Products (Optional) */}
-        <div className="mt-12">
-          <h2 className="text-2xl font-bold text-gray-900 mb-6">You might also like</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="bg-gray-100 rounded-lg p-4 text-center">
-              <p className="text-gray-500">Suggested products will appear here</p>
-            </div>
-          </div>
-        </div>
+        <RecommendedSuggestions
+          cartItems={cartItems}
+          getItemPrice={getItemPrice}
+          formatCurrency={formatCurrency}
+        />
       </div>
     </div>
   );
 };
 
 export default CartPage;
+
+// Small helper subcomponent to fetch and render suggestions
+const RecommendedSuggestions = ({ cartItems, getItemPrice, formatCurrency }) => {
+  const [suggestedProducts, setSuggestedProducts] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const fetchSuggestions = async () => {
+      try {
+        if (!cartItems || cartItems.length === 0) {
+          setSuggestedProducts([]);
+          return;
+        }
+
+        setLoading(true);
+
+        const subcategoryIds = Array.from(new Set(cartItems
+          .map(i => i.subcategory_id || i.subcategoryId || (i.subcategory && i.subcategory.id))
+          .filter(Boolean)
+        ));
+
+        const categoryIds = Array.from(new Set(cartItems
+          .map(i => i.category_id || i.categoryId || (i.category && i.category.id))
+          .filter(Boolean)
+        ));
+
+        if (subcategoryIds.length === 0 && categoryIds.length === 0) {
+          setSuggestedProducts([]);
+          return;
+        }
+
+        const { getSubcategoryProducts, getProductsByCategory } = await import('../../services/api');
+
+        const cartIds = new Set(cartItems.map(i => Number(i.id)));
+        const seen = new Set();
+        const results = [];
+
+        // Try subcategories first
+        for (const subId of subcategoryIds) {
+          try {
+            const data = await getSubcategoryProducts(subId);
+            const products = Array.isArray(data) ? data : (data.products || data.data || []);
+            for (const p of products) {
+              if (results.length >= 8) break;
+              if (!p || cartIds.has(Number(p.id))) continue;
+              if (seen.has(Number(p.id))) continue;
+              seen.add(Number(p.id));
+              results.push(p);
+            }
+            if (results.length >= 8) break;
+          } catch (err) {
+            console.warn('Subcategory fetch failed', subId, err);
+          }
+        }
+
+        // Fallback to categories
+        if (results.length < 8) {
+          for (const catId of categoryIds) {
+            try {
+              const data = await getProductsByCategory(catId);
+              const products = Array.isArray(data) ? data : (data.products || data.data || []);
+              for (const p of products) {
+                if (results.length >= 8) break;
+                if (!p || cartIds.has(Number(p.id))) continue;
+                if (seen.has(Number(p.id))) continue;
+                seen.add(Number(p.id));
+                results.push(p);
+              }
+              if (results.length >= 8) break;
+            } catch (err) {
+              console.warn('Category fetch failed', catId, err);
+            }
+          }
+        }
+
+        setSuggestedProducts(results.slice(0, 4));
+      } catch (err) {
+        console.error('Failed to fetch suggestions', err);
+        setSuggestedProducts([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchSuggestions();
+  }, [cartItems]);
+
+  return (
+    <div className="mt-12">
+      <h2 className="text-2xl font-bold text-gray-900 mb-6">You might also like</h2>
+
+      {loading ? (
+        <div className="text-center text-gray-500">Loading suggestions...</div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+          {suggestedProducts && suggestedProducts.length > 0 ? (
+            suggestedProducts.map(p => (
+              <a
+                href={`/product/${p.id}`}
+                key={p.id}
+                className="bg-white border rounded-lg p-4 hover:shadow-md transition-shadow flex flex-col items-center text-center"
+              >
+                <div className="w-full h-32 mb-3 overflow-hidden rounded">
+                  {p.image_urls && p.image_urls[0] ? (
+                    // relative URL
+                    <img
+                      src={`/api/uploads/products/${p.image_urls[0].split('/').pop()}`}
+                      alt={p.name}
+                      className="w-full h-full object-cover"
+                      onError={(e) => { e.target.onerror = null; e.target.src = 'data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'80\' height=\'80\' viewBox=\'0 0 80 80\'%3E%3Crect width=\'80\' height=\'80\' fill=\'%23f0f0f0\'/%3E%3Ctext x=\'50%25\' y=\'50%25\' dominant-baseline=\'middle\' text-anchor=\'middle\' font-family=\'Arial\' font-size=\'12\' fill=\'%23999\'%3ENo Image%3C/text%3E%3C/svg%3E'; }}
+                    />
+                  ) : (
+                    <div className="w-full h-full bg-gray-100 flex items-center justify-center">
+                      <span className="text-gray-400">No Image</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex-1 w-full">
+                  <p className="font-medium text-gray-900 line-clamp-2">{p.name}</p>
+                  <p className="text-sm text-gray-600 mt-2">KSh {formatCurrency(getItemPrice(p))}</p>
+                </div>
+              </a>
+            ))
+          ) : (
+            <div className="bg-gray-100 rounded-lg p-4 text-center">
+              <p className="text-gray-500">Suggested products will appear here</p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};

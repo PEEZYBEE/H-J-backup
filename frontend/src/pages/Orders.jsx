@@ -18,6 +18,7 @@ const Orders = () => {
   const [paymentFilter, setPaymentFilter] = useState('all');
   const [sortBy, setSortBy] = useState('newest');
   const [selectedOrder, setSelectedOrder] = useState(null);
+  const [editingOrder, setEditingOrder] = useState(null);
   const [viewMode, setViewMode] = useState('table');
   const [showPendingOnly, setShowPendingOnly] = useState(false);
   const [showRawData, setShowRawData] = useState(false);
@@ -82,31 +83,66 @@ const Orders = () => {
     }
   ];
 
-  useEffect(() => {
-    loadOrders();
-  }, []);
-
-  useEffect(() => {
-    filterAndSortOrders();
-  }, [orders, searchTerm, statusFilter, paymentFilter, sortBy, showPendingOnly]);
-
-  const loadOrders = () => {
+  async function loadOrders() {
+    setLoading(true);
     try {
+      // Try fetching admin orders from backend first
+      const token = localStorage.getItem('token') || localStorage.getItem('access_token');
+      const res = await fetch('/api/orders/all', {
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const apiOrders = (data.orders || []).map(o => {
+          return {
+            id: o.id,
+            orderNumber: o.order_number || o.orderNumber || o.order_number,
+            customer: {
+              name: o.customer?.name || o.customer_name || 'Customer',
+              phone: o.customer?.phone || o.customer_phone || 'No Phone',
+              email: o.customer?.email || o.customer_email || ''
+            },
+            items: (o.order_items || []).map(it => ({
+              name: it.product?.name || it.product_name || 'Product',
+              quantity: it.quantity || 1,
+              price: it.unit_price || it.total_price || 0,
+              image: it.product?.image_urls?.[0] || null
+            })),
+            subtotal: o.subtotal || o.subtotal || 0,
+            shippingFee: o.shipping_cost || o.shipping_cost || 0,
+            discount: o.discount_amount || 0,
+            total: o.total_amount || o.total_amount || 0,
+            paymentMethod: o.payment_method || 'mpesa_till',
+            paymentStatus: o.payment_status || o.paymentStatus || 'pending_verification',
+            mpesaCode: (o.payments && o.payments[0] && o.payments[0].transaction_id) || 'N/A',
+            paymentPhone: (o.payments && o.payments[0] && o.payments[0].phone_number) || (o.customer && o.customer.phone) || 'No Phone',
+            tillNumber: (o.payments && o.payments[0] && o.payments[0].transaction_id) || null,
+            orderStatus: o.order_status || 'pending',
+            submittedAt: o.created_at || new Date().toISOString(),
+            createdAt: o.created_at || new Date().toISOString(),
+            verifiedAt: null,
+            notes: o.notes || '',
+            rawOrder: o,
+            payments: o.payments || []
+          };
+        });
+
+        const combined = [...sampleOrders, ...apiOrders];
+        setOrders(combined);
+        calculateStats(combined);
+        setLoading(false);
+        return;
+      }
+
+      // Fallback: read from localStorage (existing behavior)
       const savedOrders = JSON.parse(localStorage.getItem('pending_verifications') || '[]');
       const hnjOrders = JSON.parse(localStorage.getItem('hnj_orders') || '[]');
-      
-      // Combine all orders
       const allSavedOrders = [...savedOrders, ...hnjOrders];
-      
-      // Process saved orders to ensure they have required fields
       const processedOrders = allSavedOrders.map(order => {
-        // Extract customer info from different possible property names
         const customerInfo = order.customerInfo || order.customer || {};
         const shippingAddress = order.shippingAddress || {};
-        
-        // Extract items data
         const items = order.items || [];
-        
         return {
           id: order.id || `ORD-${Date.now()}`,
           orderNumber: order.orderNumber || order.id || `ORD-${Date.now()}`,
@@ -145,21 +181,18 @@ const Orders = () => {
           createdAt: order.createdAt || new Date().toISOString(),
           verifiedAt: order.verifiedAt || null,
           notes: order.notes || 'Awaiting verification',
-          // Keep the original data for reference
           rawCustomerInfo: customerInfo,
           rawShippingAddress: shippingAddress,
           rawItems: items,
-          rawOrder: order // Keep entire original order
+          rawOrder: order
         };
       });
-      
+
       const allOrders = [...sampleOrders, ...processedOrders];
-      
-      // Remove duplicates based on order number
       const uniqueOrders = allOrders.filter((order, index, self) =>
         index === self.findIndex((o) => o.orderNumber === order.orderNumber)
       );
-      
+
       setOrders(uniqueOrders);
       calculateStats(uniqueOrders);
       setLoading(false);
@@ -169,21 +202,55 @@ const Orders = () => {
       calculateStats(sampleOrders);
       setLoading(false);
     }
-  };
+  }
+
+  async function exportReports() {
+    try {
+      const token = localStorage.getItem('token') || localStorage.getItem('access_token');
+      const res = await fetch('/api/orders/reports/all', {
+        method: 'GET',
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Failed to generate report' }));
+        alert(err.error || 'Failed to generate report');
+        return;
+      }
+
+      const blob = await res.blob();
+      const disposition = res.headers.get('Content-Disposition') || '';
+      let filename = 'hnj-orders-report.pdf';
+      const match = disposition.match(/filename=([^;]+)/i);
+      if (match && match[1]) filename = match[1].replace(/"/g, '').trim();
+
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error('❌ Error exporting reports', e);
+      alert('Error exporting reports');
+    }
+  }
 
   const calculateStats = (ordersList) => {
     const stats = {
       total: ordersList.length,
       pending: ordersList.filter(o => o.paymentStatus === 'pending_verification').length,
       verified: ordersList.filter(o => o.paymentStatus === 'verified').length,
-      paid: ordersList.filter(o => o.paymentStatus === 'paid').length,
+      paid: ordersList.filter(o => (o.paymentStatus === 'paid' || o.paymentStatus === 'completed')).length,
       cancelled: ordersList.filter(o => o.orderStatus === 'cancelled').length,
       totalAmount: ordersList.reduce((sum, order) => sum + (order.total || 0), 0)
     };
     setStats(stats);
   };
 
-  const filterAndSortOrders = () => {
+  function filterAndSortOrders() {
     let filtered = [...orders];
 
     // Apply search filter
@@ -214,7 +281,11 @@ const Orders = () => {
 
     // Apply payment filter
     if (paymentFilter !== 'all') {
-      filtered = filtered.filter(order => order.paymentStatus === paymentFilter);
+      if (paymentFilter === 'paid') {
+        filtered = filtered.filter(order => order.paymentStatus === 'paid' || order.paymentStatus === 'completed');
+      } else {
+        filtered = filtered.filter(order => order.paymentStatus === paymentFilter);
+      }
     }
 
     // Show pending only
@@ -241,41 +312,83 @@ const Orders = () => {
     }
 
     setFilteredOrders(filtered);
-  };
+  }
+
+  useEffect(() => {
+    loadOrders();
+  }, []);
+
+  useEffect(() => {
+    filterAndSortOrders();
+  }, [orders, searchTerm, statusFilter, paymentFilter, sortBy, showPendingOnly]);
 
   const handleVerifyPayment = (orderId) => {
-    const updatedOrders = orders.map(order => {
-      if (order.id === orderId) {
-        return {
-          ...order,
-          paymentStatus: 'verified',
-          orderStatus: 'confirmed',
-          verifiedAt: new Date().toISOString(),
-          notes: 'Payment verified by admin'
-        };
+    (async () => {
+      try {
+        const order = orders.find(o => o.id === orderId);
+        if (!order) return alert('Order not found');
+
+        const payment = order.payments && order.payments[0];
+        const token = localStorage.getItem('token') || localStorage.getItem('access_token');
+        const body = payment
+          ? { payment_id: payment.id, confirmed: true }
+          : { order_id: order.id, confirmed: true };
+
+        const res = await fetch('/api/payments/till/confirm', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {})
+          },
+          body: JSON.stringify(body)
+        });
+
+        if (res.ok) {
+          alert('Payment confirmed successfully');
+          loadOrders();
+        } else {
+          const err = await res.json().catch(() => ({}));
+          alert(err.error || 'Failed to confirm payment');
+        }
+      } catch (e) {
+        console.error(e);
+        alert('Error while confirming payment');
       }
-      return order;
-    });
-    
-    setOrders(updatedOrders);
-    alert(`Order ${orderId} marked as verified!`);
+    })();
   };
 
   const handleMarkAsPaid = (orderId) => {
-    const updatedOrders = orders.map(order => {
-      if (order.id === orderId) {
-        return {
-          ...order,
-          paymentStatus: 'paid',
-          orderStatus: 'processing',
-          notes: 'Payment confirmed, processing order'
-        };
+    (async () => {
+      try {
+        const order = orders.find(o => o.id === orderId);
+        if (!order) return alert('Order not found');
+        const payment = order.payments && order.payments[0];
+        const token = localStorage.getItem('token') || localStorage.getItem('access_token');
+        const body = payment
+          ? { payment_id: payment.id, confirmed: true }
+          : { order_id: order.id, confirmed: true };
+
+        const res = await fetch('/api/payments/till/confirm', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {})
+          },
+          body: JSON.stringify(body)
+        });
+
+        if (res.ok) {
+          alert('Order marked as paid');
+          loadOrders();
+        } else {
+          const err = await res.json().catch(() => ({}));
+          alert(err.error || 'Failed to mark as paid');
+        }
+      } catch (e) {
+        console.error(e);
+        alert('Error while marking order as paid');
       }
-      return order;
-    });
-    
-    setOrders(updatedOrders);
-    alert(`Order ${orderId} marked as paid!`);
+    })();
   };
 
   const handleCancelOrder = (orderId) => {
@@ -312,16 +425,49 @@ const Orders = () => {
     }, 1000);
   };
 
-  const handleDebugData = () => {
-    const savedOrders = JSON.parse(localStorage.getItem('pending_verifications') || '[]');
-    const hnjOrders = JSON.parse(localStorage.getItem('hnj_orders') || '[]');
-    
-    console.log('=== DEBUG: All Orders Data ===');
-    console.log('Pending Verifications:', savedOrders);
-    console.log('HNJ Orders:', hnjOrders);
-    console.log('Total orders in localStorage:', savedOrders.length + hnjOrders.length);
-    
-    alert(`Found ${savedOrders.length} pending verifications and ${hnjOrders.length} orders. Check console for details.`);
+  
+
+  const downloadOrderDocument = async (order, documentType) => {
+    try {
+      const orderNumber = order?.orderNumber || order?.id;
+      if (!orderNumber) {
+        alert('Order number is missing for this order.');
+        return;
+      }
+
+      const token = localStorage.getItem('token') || localStorage.getItem('access_token');
+      const phone = order?.customer?.phone ? `?phone=${encodeURIComponent(order.customer.phone)}` : '';
+      const response = await fetch(
+        `/api/orders/orders/${encodeURIComponent(orderNumber)}/${documentType}${phone}`,
+        {
+          method: 'GET',
+          headers: token ? { Authorization: `Bearer ${token}` } : {}
+        }
+      );
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Failed to download ${documentType}`);
+      }
+
+      const blob = await response.blob();
+      const disposition = response.headers.get('Content-Disposition') || '';
+      const defaultName = `${documentType}-${orderNumber}.html`;
+      const fileNameMatch = disposition.match(/filename=([^;]+)/i);
+      const fileName = fileNameMatch ? fileNameMatch[1].replace(/"/g, '').trim() : defaultName;
+
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Document download failed:', error);
+      alert(error.message || 'Failed to download document');
+    }
   };
 
   const formatDate = (dateString) => {
@@ -354,9 +500,10 @@ const Orders = () => {
           </span>
         );
       case 'paid':
+      case 'completed':
         return (
           <span className="px-3 py-1 text-xs font-bold rounded-full bg-green-100 text-green-800 flex items-center gap-1">
-            <FaCheckCircle /> Paid
+            <FaCheckCircle /> Completed
           </span>
         );
       case 'confirmed':
@@ -422,12 +569,6 @@ const Orders = () => {
             <p className="text-gray-600">Manage customer orders and payment verifications</p>
           </div>
           <div className="flex gap-2">
-            <button
-              onClick={handleDebugData}
-              className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 flex items-center gap-2"
-            >
-              <FaBug /> Debug Data
-            </button>
             <button
               onClick={handleRefreshOrders}
               className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2"
@@ -563,43 +704,14 @@ const Orders = () => {
 
         {/* Quick Actions */}
         <div className="flex flex-wrap gap-3 mt-4">
-          <button
-            onClick={() => setShowPendingOnly(!showPendingOnly)}
-            className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
-              showPendingOnly
-                ? 'bg-yellow-600 text-white'
-                : 'bg-yellow-100 text-yellow-800 hover:bg-yellow-200'
-            }`}
-          >
-            <FaClock /> {showPendingOnly ? 'Showing Pending Only' : 'Show Pending Only'}
+          
+          
+          
+          <button onClick={exportReports} className="px-4 py-2 bg-gray-100 text-gray-800 rounded-lg hover:bg-gray-200 flex items-center gap-2">
+            <FaDownload /> Reports
           </button>
           
-          <button
-            onClick={() => setShowRawData(!showRawData)}
-            className={`px-4 py-2 rounded-lg flex items-center gap-2 ${
-              showRawData
-                ? 'bg-purple-600 text-white'
-                : 'bg-purple-100 text-purple-800 hover:bg-purple-200'
-            }`}
-          >
-            <FaDatabase /> {showRawData ? 'Hide Raw Data' : 'Show Raw Data'}
-          </button>
           
-          <button
-            onClick={() => setViewMode(viewMode === 'table' ? 'grid' : 'table')}
-            className="px-4 py-2 bg-gray-100 text-gray-800 rounded-lg hover:bg-gray-200 flex items-center gap-2"
-          >
-            {viewMode === 'table' ? <FaList /> : <FaTable />}
-            {viewMode === 'table' ? 'Grid View' : 'Table View'}
-          </button>
-          
-          <button className="px-4 py-2 bg-gray-100 text-gray-800 rounded-lg hover:bg-gray-200 flex items-center gap-2">
-            <FaDownload /> Export
-          </button>
-          
-          <button className="px-4 py-2 bg-gray-100 text-gray-800 rounded-lg hover:bg-gray-200 flex items-center gap-2">
-            <FaPrint /> Print
-          </button>
         </div>
       </div>
 
@@ -636,12 +748,7 @@ const Orders = () => {
                     <FaBoxOpen className="text-4xl mx-auto mb-3 text-gray-300" />
                     <p className="text-lg font-medium">No orders found</p>
                     <p className="text-sm">Try adjusting your filters or search terms</p>
-                    <button
-                      onClick={handleDebugData}
-                      className="mt-3 px-3 py-1 bg-purple-100 text-purple-700 rounded text-sm"
-                    >
-                      Check localStorage data
-                    </button>
+                    
                   </td>
                 </tr>
               ) : (
@@ -781,7 +888,8 @@ const Orders = () => {
                         )}
                         
                         <button className="px-3 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 flex items-center gap-1 text-sm">
-                          <FaEdit /> Edit
+                          <FaEdit />
+                          <span onClick={() => setEditingOrder(order)} className="ml-1">Edit</span>
                         </button>
                       </div>
                     </td>
@@ -843,11 +951,11 @@ const Orders = () => {
                   <div className="space-y-3">
                     <div className="flex justify-between">
                       <span className="text-gray-600">Order Number:</span>
-                      <span className="font-bold">{selectedOrder.orderNumber || 'N/A'}</span>
+                      <span className="font-bold text-gray-900">{selectedOrder.orderNumber || 'N/A'}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-gray-600">Date:</span>
-                      <span>{formatDate(selectedOrder.submittedAt || selectedOrder.createdAt)}</span>
+                      <span className="text-gray-900">{formatDate(selectedOrder.submittedAt || selectedOrder.createdAt)}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-gray-600">Payment Method:</span>
@@ -855,15 +963,15 @@ const Orders = () => {
                     </div>
                     <div className="flex justify-between">
                       <span className="text-gray-600">Till Number:</span>
-                      <span className="font-bold">{selectedOrder.tillNumber || 'N/A'}</span>
+                      <span className="font-bold text-gray-900">{selectedOrder.tillNumber || 'N/A'}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-gray-600">M-PESA Code:</span>
-                      <span className="font-mono font-bold">{selectedOrder.mpesaCode || 'N/A'}</span>
+                      <span className="font-mono font-bold text-gray-900">{selectedOrder.mpesaCode || 'N/A'}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-gray-600">Payment Phone:</span>
-                      <span>{selectedOrder.paymentPhone || 'N/A'}</span>
+                      <span className="text-gray-900">{selectedOrder.paymentPhone || 'N/A'}</span>
                     </div>
                   </div>
                 </div>
@@ -904,10 +1012,10 @@ const Orders = () => {
               <div className="mb-6">
                 <h3 className="font-bold text-gray-900 mb-3">Customer Information</h3>
                 <div className="bg-gray-50 p-4 rounded-lg">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                       <p className="text-gray-600 text-sm mb-1">Full Name</p>
-                      <p className="font-medium">
+                      <p className="font-medium text-gray-900">
                         {selectedOrder.customer?.name || 
                          (selectedOrder.rawCustomerInfo?.firstName && selectedOrder.rawCustomerInfo?.lastName 
                            ? `${selectedOrder.rawCustomerInfo.firstName} ${selectedOrder.rawCustomerInfo.lastName}`
@@ -916,13 +1024,13 @@ const Orders = () => {
                     </div>
                     <div>
                       <p className="text-gray-600 text-sm mb-1">Phone Number</p>
-                      <p className="font-medium">
+                      <p className="font-medium text-gray-900">
                         {selectedOrder.customer?.phone || selectedOrder.rawCustomerInfo?.phone || 'No Phone'}
                       </p>
                     </div>
                     <div>
                       <p className="text-gray-600 text-sm mb-1">Email Address</p>
-                      <p className="font-medium">
+                      <p className="font-medium text-gray-900">
                         {selectedOrder.customer?.email || selectedOrder.rawCustomerInfo?.email || 'No Email'}
                       </p>
                     </div>
@@ -955,7 +1063,7 @@ const Orders = () => {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                       <p className="text-gray-600 text-sm mb-1">Street Address</p>
-                      <p className="font-medium">
+                      <p className="font-medium text-gray-900">
                         {selectedOrder.shippingAddress?.street || 
                          selectedOrder.rawShippingAddress?.street || 
                          'Not specified'}
@@ -963,7 +1071,7 @@ const Orders = () => {
                     </div>
                     <div>
                       <p className="text-gray-600 text-sm mb-1">Apartment/Suite</p>
-                      <p className="font-medium">
+                      <p className="font-medium text-gray-900">
                         {selectedOrder.shippingAddress?.apartment || 
                          selectedOrder.rawShippingAddress?.apartment || 
                          'N/A'}
@@ -971,7 +1079,7 @@ const Orders = () => {
                     </div>
                     <div>
                       <p className="text-gray-600 text-sm mb-1">City</p>
-                      <p className="font-medium">
+                      <p className="font-medium text-gray-900">
                         {selectedOrder.shippingAddress?.city || 
                          selectedOrder.rawShippingAddress?.city || 
                          'Nairobi'}
@@ -979,7 +1087,7 @@ const Orders = () => {
                     </div>
                     <div>
                       <p className="text-gray-600 text-sm mb-1">County</p>
-                      <p className="font-medium">
+                      <p className="font-medium text-gray-900">
                         {selectedOrder.shippingAddress?.county || 
                          selectedOrder.rawShippingAddress?.county || 
                          'Not specified'}
@@ -1043,12 +1151,12 @@ const Orders = () => {
                       <div className="space-y-2">
                         <div className="flex justify-between">
                           <span className="text-gray-600">Subtotal</span>
-                          <span>KSh {(selectedOrder.subtotal || selectedOrder.total || 0).toLocaleString()}</span>
+                          <span className="text-gray-900 font-medium">KSh {(selectedOrder.subtotal || selectedOrder.total || 0).toLocaleString()}</span>
                         </div>
                         {(selectedOrder.shippingFee || 0) > 0 && (
                           <div className="flex justify-between">
                             <span className="text-gray-600">Shipping Fee</span>
-                            <span>KSh {(selectedOrder.shippingFee || 0).toLocaleString()}</span>
+                            <span className="text-gray-900">KSh {(selectedOrder.shippingFee || 0).toLocaleString()}</span>
                           </div>
                         )}
                         {(selectedOrder.discount || 0) > 0 && (
@@ -1058,8 +1166,8 @@ const Orders = () => {
                           </div>
                         )}
                         <div className="flex justify-between font-bold text-lg pt-2 border-t">
-                          <span>Total Amount</span>
-                          <span className="text-red-600">
+                          <span className="text-gray-900">Total Amount</span>
+                          <span className="text-gray-900 font-bold">
                             KSh {(selectedOrder.total || selectedOrder.amount || 0).toLocaleString()}
                           </span>
                         </div>
@@ -1090,13 +1198,151 @@ const Orders = () => {
                   </button>
                 )}
                 
-                <button className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2">
-                  <FaPrint /> Print Invoice
+                <button
+                  onClick={() => downloadOrderDocument(selectedOrder, 'invoice')}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2"
+                >
+                  <FaPrint /> Download Invoice
+                </button>
+
+                <button
+                  onClick={() => downloadOrderDocument(selectedOrder, 'delivery-note')}
+                  className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 flex items-center gap-2"
+                >
+                  <FaDownload /> Delivery Note
                 </button>
                 
                 <button className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 flex items-center gap-2">
                   <FaWhatsapp /> WhatsApp Customer
                 </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Order Modal */}
+      {editingOrder && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-6">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-bold text-gray-900">Edit Order</h2>
+                <button onClick={() => setEditingOrder(null)} className="text-gray-400 hover:text-gray-600">✕</button>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="text-sm text-gray-600">Customer Name</label>
+                  <input
+                    className="w-full mt-1 p-2 border rounded"
+                    value={editingOrder.customer?.name || editingOrder.customer_name || ''}
+                    onChange={(e) => setEditingOrder({ ...editingOrder, customer: { ...(editingOrder.customer||{}), name: e.target.value }, customer_name: e.target.value })}
+                  />
+                </div>
+
+                <div>
+                  <label className="text-sm text-gray-600">Phone</label>
+                  <input
+                    className="w-full mt-1 p-2 border rounded"
+                    value={editingOrder.customer?.phone || editingOrder.customer_phone || ''}
+                    onChange={(e) => setEditingOrder({ ...editingOrder, customer: { ...(editingOrder.customer||{}), phone: e.target.value }, customer_phone: e.target.value })}
+                  />
+                </div>
+
+                <div>
+                  <label className="text-sm text-gray-600">Email</label>
+                  <input
+                    className="w-full mt-1 p-2 border rounded"
+                    value={editingOrder.customer?.email || editingOrder.customer_email || ''}
+                    onChange={(e) => setEditingOrder({ ...editingOrder, customer: { ...(editingOrder.customer||{}), email: e.target.value }, customer_email: e.target.value })}
+                  />
+                </div>
+
+                <div>
+                  <label className="text-sm text-gray-600">Notes</label>
+                  <textarea
+                    className="w-full mt-1 p-2 border rounded"
+                    rows={3}
+                    value={editingOrder.notes || ''}
+                    onChange={(e) => setEditingOrder({ ...editingOrder, notes: e.target.value })}
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-sm text-gray-600">Order Status</label>
+                    <select className="w-full mt-1 p-2 border rounded"
+                      value={editingOrder.orderStatus || editingOrder.order_status || 'pending'}
+                      onChange={(e) => setEditingOrder({ ...editingOrder, orderStatus: e.target.value, order_status: e.target.value })}
+                    >
+                      <option value="pending">pending</option>
+                      <option value="pending_verification">pending_verification</option>
+                      <option value="confirmed">confirmed</option>
+                      <option value="processing">processing</option>
+                      <option value="shipped">shipped</option>
+                      <option value="delivered">delivered</option>
+                      <option value="cancelled">cancelled</option>
+                      <option value="completed">completed</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-sm text-gray-600">Payment Status</label>
+                    <select className="w-full mt-1 p-2 border rounded"
+                      value={editingOrder.paymentStatus || editingOrder.payment_status || 'pending_verification'}
+                      onChange={(e) => setEditingOrder({ ...editingOrder, paymentStatus: e.target.value, payment_status: e.target.value })}
+                    >
+                      <option value="pending_verification">pending_verification</option>
+                      <option value="verified">verified</option>
+                      <option value="paid">paid</option>
+                      <option value="failed">failed</option>
+                      <option value="cancelled">cancelled</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3 mt-6">
+                <button onClick={() => setEditingOrder(null)} className="px-4 py-2 border rounded text-gray-700">Cancel</button>
+                <button onClick={async () => {
+                  try {
+                    const token = localStorage.getItem('token') || localStorage.getItem('access_token');
+                    const payload = {
+                      customer_name: editingOrder.customer_name || editingOrder.customer?.name,
+                      customer_phone: editingOrder.customer_phone || editingOrder.customer?.phone,
+                      customer_email: editingOrder.customer_email || editingOrder.customer?.email,
+                      notes: editingOrder.notes,
+                      order_status: editingOrder.order_status || editingOrder.orderStatus,
+                      payment_status: editingOrder.payment_status || editingOrder.paymentStatus
+                    };
+
+                    const res = await fetch(`/api/orders/${editingOrder.id}`, {
+                      method: 'PUT',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        ...(token ? { Authorization: `Bearer ${token}` } : {})
+                      },
+                      body: JSON.stringify(payload)
+                    });
+
+                    if (!res.ok) {
+                      const err = await res.json().catch(() => ({}));
+                      throw new Error(err.error || 'Failed to save');
+                    }
+
+                    const body = await res.json();
+                    // update local orders list
+                    const updatedOrder = body.order;
+                    setOrders(prev => prev.map(o => o.id === updatedOrder.id ? ({...o, ...updatedOrder}) : o));
+                    setSelectedOrder(updatedOrder);
+                    setEditingOrder(null);
+                    alert('Order updated');
+                  } catch (e) {
+                    console.error(e);
+                    alert(e.message || 'Failed to update order');
+                  }
+                }} className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Save</button>
               </div>
             </div>
           </div>

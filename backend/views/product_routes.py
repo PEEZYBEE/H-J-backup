@@ -2,11 +2,12 @@
 import os
 import uuid
 from datetime import datetime
-from flask import Blueprint, request, jsonify, current_app, send_from_directory
+from flask import Blueprint, request, jsonify, current_app, send_from_directory, g
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from werkzeug.utils import secure_filename
-from app import db
-from models import Product, ProductCategory, ProductSubCategory, User
+from models import db, Product, ProductCategory, ProductSubCategory, User
+from utils.schemas import CreateProductSchema
+from marshmallow import ValidationError
 
 product_bp = Blueprint('products', __name__)
 
@@ -1045,8 +1046,12 @@ def create_product():
         if user.role not in ['admin', 'staff', 'manager']:
             return jsonify({'success': False, 'message': 'Unauthorized'}), 403
         
-        data = request.get_json()
+        data = getattr(g, 'sanitized_json', None) or request.get_json(silent=True)
         print(f"DEBUG: Creating product with data: {data}")
+        try:
+            data = CreateProductSchema().load(data or {})
+        except ValidationError as ve:
+            return jsonify({'success': False, 'message': 'Invalid input', 'errors': ve.messages}), 400
         
         # Validate required fields
         if not data.get('name'):

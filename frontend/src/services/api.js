@@ -43,6 +43,10 @@ export const authAPI = {
     const response = await api.post('/auth/login', credentials);
     return response.data;
   },
+  googleAuth: async (payload) => {
+    const response = await api.post('/auth/google', payload);
+    return response.data;
+  },
   register: async (userData) => {
     const response = await api.post('/auth/register', userData);
     return response.data;
@@ -518,6 +522,7 @@ export const settingsAPI = {
 
 // Auth exports
 export const login = authAPI.login;
+export const googleAuth = authAPI.googleAuth;
 export const register = authAPI.register;
 export const getCurrentUser = authAPI.getCurrentUser;
 export const logout = authAPI.logout;
@@ -634,6 +639,30 @@ export const updateTaxRate = settingsAPI.updateTaxRate;
 export const getPaymentMethods = settingsAPI.getPaymentMethods;
 
 
+// ========== NOTIFICATIONS API ==========
+export const notificationsAPI = {
+  getNotifications: async (params = {}) => {
+    const response = await api.get('/notifications', { params });
+    return response.data;
+  },
+  markAsRead: async (notificationId) => {
+    const response = await api.post(`/notifications/${notificationId}/read`);
+    return response.data;
+  },
+  markAllRead: async () => {
+    const response = await api.post('/notifications/read-all');
+    return response.data;
+  },
+  getLowStockAlerts: async () => {
+    const response = await api.get('/notifications/low-stock');
+    return response.data;
+  },
+};
+
+export const getNotifications = notificationsAPI.getNotifications;
+export const markNotificationRead = notificationsAPI.markAsRead;
+export const markAllNotificationsRead = notificationsAPI.markAllRead;
+export const getLowStockAlerts = notificationsAPI.getLowStockAlerts;
 
 
 // ========== ERRAND & DROPSHIPPING API ==========
@@ -732,9 +761,9 @@ export const errandAPI = {
     return response.data;
   },
 
-  // Notifications
+  // Notifications (errand-specific)
   getMyNotifications: async (params = {}) => {
-    const response = await api.get('/notifications', { params });
+    const response = await api.get('/errand-notifications', { params });
     return response.data;
   },
 

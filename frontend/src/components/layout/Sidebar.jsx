@@ -36,8 +36,11 @@ import {
 } from 'react-icons/fa';
 
 const Sidebar = () => {
-  // FIXED: Start closed by default instead of open
-  const [isOpen, setIsOpen] = useState(false); // ← CHANGED FROM true TO false
+  // Sidebar open state handling: pinned (manual), hovered (auto), mobile overlay
+  const [isPinned, setIsPinned] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const open = isPinned || isHovered || mobileOpen;
   const navigate = useNavigate();
   const location = useLocation();
   
@@ -371,37 +374,41 @@ const Sidebar = () => {
   return (
     <>
       {/* Mobile Overlay */}
-      {isOpen && window.innerWidth < 768 && (
+      {mobileOpen && window.innerWidth < 768 && (
         <div 
           className="hnj-sidebar-overlay"
-          onClick={() => setIsOpen(false)}
+          onClick={() => setMobileOpen(false)}
         />
       )}
 
       {/* Mobile Toggle Button */}
       <button
         className="hnj-sidebar-toggle-mobile"
-        onClick={() => setIsOpen(!isOpen)}
-        aria-label={isOpen ? 'Close sidebar' : 'Open sidebar'}
+        onClick={() => setMobileOpen(prev => !prev)}
+        aria-label={mobileOpen ? 'Close sidebar' : 'Open sidebar'}
       >
-        {isOpen ? <FaTimes /> : <FaBars />}
+        {mobileOpen ? <FaTimes /> : <FaBars />}
       </button>
 
       {/* Glassmorphic Sidebar */}
-      <aside className={`hnj-sidebar ${isOpen ? 'open' : ''}`}>
+      <aside
+        className={`hnj-sidebar ${open ? 'open' : ''}`}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+      >
         <div className="hnj-sidebar-inner">
           
           {/* Header */}
           <header className="hnj-sidebar-header">
             <button
               className="hnj-sidebar-toggle"
-              onClick={() => setIsOpen(!isOpen)}
-              aria-label="Toggle sidebar"
+              onClick={() => setIsPinned(prev => !prev)}
+              aria-label={open ? 'Collapse sidebar' : 'Expand sidebar'}
             >
-              {isOpen ? <FaTimes /> : <FaBars />}
+              {open ? <FaTimes /> : <FaBars />}
             </button>
             
-            {isOpen && (
+            {open && (
               <div className="hnj-sidebar-logo">
                 <div className="hnj-logo-icon">H&J</div>
                 <div>
@@ -413,7 +420,7 @@ const Sidebar = () => {
           </header>
 
           {/* User Info */}
-          {isOpen && (
+          {open && (
             <div className="hnj-user-info">
               <div className="hnj-user-avatar">
                 {getUserInitial()}
@@ -444,14 +451,14 @@ const Sidebar = () => {
                     hnj-nav-item
                     ${isActive ? 'active' : ''}
                   `}
-                  onClick={() => window.innerWidth < 768 && setIsOpen(false)}
+                  onClick={() => window.innerWidth < 768 && setMobileOpen(false)}
                   style={{ animationDelay: `${0.1 + index * 0.05}s` }}
                 >
                   <span className="hnj-nav-icon">{item.icon}</span>
-                  {isOpen && <span className="hnj-nav-label">{item.label}</span>}
+                  {open && <span className="hnj-nav-label">{item.label}</span>}
                   
                   {/* Tooltip for collapsed state */}
-                  {!isOpen && (
+                  {!open && (
                     <div className="hnj-nav-tooltip">
                       {item.label}
                     </div>
@@ -461,7 +468,7 @@ const Sidebar = () => {
             </div>
 
             {/* Errand System Section */}
-            {errandNav.length > 0 && isOpen && (
+            {errandNav.length > 0 && open && (
               <div className="hnj-nav-separator">
                 <span>Errand System</span>
               </div>
@@ -485,14 +492,14 @@ const Sidebar = () => {
                       ${item.id === 'errand-history' ? 'hnj-nav-history' : ''}
                       ${item.id === 'runner-performance' ? 'hnj-nav-performance' : ''}
                     `}
-                    onClick={() => window.innerWidth < 768 && setIsOpen(false)}
+                    onClick={() => window.innerWidth < 768 && setMobileOpen(false)}
                     style={{ animationDelay: `${0.1 + index * 0.05}s` }}
                   >
                     <span className="hnj-nav-icon">{item.icon}</span>
-                    {isOpen && <span className="hnj-nav-label">{item.label}</span>}
+                    {open && <span className="hnj-nav-label">{item.label}</span>}
                     
                     {/* Tooltip for collapsed state */}
-                    {!isOpen && (
+                    {!open && (
                       <div className="hnj-nav-tooltip">
                         {item.label}
                       </div>
@@ -503,7 +510,7 @@ const Sidebar = () => {
             )}
 
             {/* Inventory Section */}
-            {inventoryNav.length > 0 && isOpen && (
+            {inventoryNav.length > 0 && open && (
               <div className="hnj-nav-separator">
                 <span>Inventory System</span>
               </div>
@@ -523,14 +530,14 @@ const Sidebar = () => {
                       ${item.id === 'batch-approval' ? 'hnj-nav-approval' : ''}
                       ${item.id === 'rejected-batches' ? 'hnj-nav-rejected' : ''}
                     `}
-                    onClick={() => window.innerWidth < 768 && setIsOpen(false)}
+                    onClick={() => window.innerWidth < 768 && setMobileOpen(false)}
                     style={{ animationDelay: `${0.1 + index * 0.05}s` }}
                   >
                     <span className="hnj-nav-icon">{item.icon}</span>
-                    {isOpen && <span className="hnj-nav-label">{item.label}</span>}
+                    {open && <span className="hnj-nav-label">{item.label}</span>}
                     
                     {/* Tooltip for collapsed state */}
-                    {!isOpen && (
+                    {!open && (
                       <div className="hnj-nav-tooltip">
                         {item.label}
                       </div>
@@ -550,16 +557,16 @@ const Sidebar = () => {
               <span className="hnj-nav-icon">
                 <FaSignOutAlt />
               </span>
-              {isOpen && <span className="hnj-nav-label">Logout</span>}
+              {open && <span className="hnj-nav-label">Logout</span>}
               
-              {!isOpen && (
+              {!open && (
                 <div className="hnj-nav-tooltip">
                   Logout
                 </div>
               )}
             </button>
 
-            {isOpen && (
+            {open && (
               <div className="hnj-sidebar-footer-info">
                 <p className="hnj-version">v1.2.0</p>
                 <p className="hnj-copyright">© {new Date().getFullYear()} H&J Store</p>
